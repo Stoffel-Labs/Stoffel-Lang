@@ -1,4 +1,4 @@
-use crate::ast::{AstNode, Literal, Parameter, FieldDefinition, EnumMember};
+use crate::ast::{AstNode, Parameter, FieldDefinition, EnumMember, Value};
 use crate::errors::{CompilerError, SourceLocation, CompilerResult};
 use std::fmt;
 use std::iter::Peekable;
@@ -191,7 +191,6 @@ impl<'a> Parser<'a> {
             type_annotation,
             value,
             is_mutable,
-            is_secret: type_is_secret, // Secrecy determined by the type annotation
         })
     }
 
@@ -224,11 +223,11 @@ impl<'a> Parser<'a> {
     fn parse_expression(&mut self) -> CompilerResult<AstNode> {
         // Very basic implementation: parse literals or identifiers for now
         match self.current_token {
-            Some(Token::IntLiteral(i)) => { self.advance(); Ok(AstNode::Literal(Literal::Int(*i))) }
-            Some(Token::FloatLiteral(f)) => { self.advance(); Ok(AstNode::Literal(Literal::Float(*f))) }
-            Some(Token::StringLiteral(s)) => { self.advance(); Ok(AstNode::Literal(Literal::String(s.clone()))) }
-            Some(Token::BoolLiteral(b)) => { self.advance(); Ok(AstNode::Literal(Literal::Bool(*b))) }
-            Some(Token::NilLiteral) => { self.advance(); Ok(AstNode::Literal(Literal::Nil)) }
+            Some(Token::IntLiteral(i)) => { self.advance(); Ok(AstNode::Literal(Value::Int(*i))) }
+            Some(Token::FloatLiteral(f)) => { self.advance(); Ok(AstNode::Literal(Value::Float(*f))) }
+            Some(Token::StringLiteral(s)) => { self.advance(); Ok(AstNode::Literal(Value::String(s.clone()))) }
+            Some(Token::BoolLiteral(b)) => { self.advance(); Ok(AstNode::Literal(Value::Bool(*b))) }
+            Some(Token::NilLiteral) => { self.advance(); Ok(AstNode::Literal(Value::Nil)) }
             Some(Token::Identifier(name)) => { self.advance(); Ok(AstNode::Identifier(name.clone())) }
             // TODO: Add function calls, binary ops, unary ops, field access, etc.
             _ => {

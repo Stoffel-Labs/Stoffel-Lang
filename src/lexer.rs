@@ -9,7 +9,7 @@ pub enum Token {
     Operator(String),
     // Literals
     IntLiteral(i64), // Includes different bases later
-    FloatLiteral(f64),
+    FloatLiteral(u64), // this is a fixed point
     StringLiteral(String),
     BoolLiteral(bool),
     NilLiteral,
@@ -208,9 +208,14 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<Token>> {
                             break;
                         }
                     }
-                    // Handle potential exponent part (e.g., .5e-3) later
+                    // Handle fixed point parsing (e.g. .5 becomes 5000 with 4 decimal places)
+                    let decimal_places = 4;
+                    let multiplier = 10_u64.pow(decimal_places);
                     match num_str.parse::<f64>() {
-                        Ok(f) => tokens.push(Token::FloatLiteral(f)),
+                        Ok(f) => {
+                            let fixed = ((f * multiplier as f64).round() as u64);
+                            tokens.push(Token::FloatLiteral(fixed))
+                        },
                         Err(_) => {
                             let location = SourceLocation {
                                 file: filename.to_string(),
@@ -218,7 +223,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<Token>> {
                                 column,
                             };
                             let snippet = extract_source_snippet(source, &location, 2);
-                            return Err(CompilerError::syntax_error(format!("Invalid float literal: {}", num_str), location)
+                            return Err(CompilerError::syntax_error(format!("Invalid fixed point literal: {}", num_str), location)
                                 .with_snippet(snippet));
                         }
                     }
@@ -287,8 +292,14 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<Token>> {
                 }
 
                 if is_float {
+                    // Handle fixed point parsing (e.g. .5 becomes 5000 with 4 decimal places)
+                    let decimal_places = 4;
+                    let multiplier = 10_u64.pow(decimal_places);
                     match num_str.parse::<f64>() {
-                        Ok(f) => tokens.push(Token::FloatLiteral(f)),
+                        Ok(f) => {
+                            let fixed = ((f * multiplier as f64).round() as u64);
+                            tokens.push(Token::FloatLiteral(fixed));
+                        },
                         Err(_) => {
                             let location = SourceLocation {
                                 file: filename.to_string(),
@@ -296,7 +307,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<Token>> {
                                 column,
                             };
                             let snippet = extract_source_snippet(source, &location, 2);
-                            return Err(CompilerError::syntax_error(format!("Invalid float literal: {}", num_str), location)
+                            return Err(CompilerError::syntax_error(format!("Invalid fixed point literal: {}", num_str), location)
                                 .with_snippet(snippet));
                         }
                     }

@@ -9,7 +9,7 @@ pub type FunctionId = u32;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
     Int(i64),
-    Float(f64),
+    Float(u64), // actually fixed point
     String(String),
     Bool(bool),
     Nil,

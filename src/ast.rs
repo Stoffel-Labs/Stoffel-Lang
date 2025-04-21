@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Literal {
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub enum Value {
     Int(i64),
-    Float(f64),
+    Float(u64),
     String(String),
     Bool(bool),
     Nil,
@@ -32,7 +32,7 @@ pub struct EnumMember {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstNode {
-    Literal(Literal),
+    Literal(Value),
     Identifier(String),
     Assignment {
         target: Box<AstNode>,
@@ -181,6 +181,7 @@ impl AstNode {
             AstNode::TryCatch { .. } => false,
             AstNode::NamedArgument { .. } => false,
             AstNode::FunctionType { .. } | AstNode::TupleType(_) | AstNode::ListType(_) | AstNode::DictType { .. } => false,
+            &AstNode::SecretType(_) => todo!(), // TODO: figure out how we want to handle secret types
         }
     }
 }

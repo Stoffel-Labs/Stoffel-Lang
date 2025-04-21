@@ -51,11 +51,11 @@ impl CodeGenerator {
             AstNode::Literal(lit) => {
                 let reg = self.allocate_register()?;
                 let constant = match lit {
-                    crate::ast::Literal::Int(i) => Constant::Int(*i),
-                    crate::ast::Literal::Float(f) => Constant::Float(*f),
-                    crate::ast::Literal::String(s) => Constant::String(s.clone()),
-                    crate::ast::Literal::Bool(b) => Constant::Bool(*b),
-                    crate::ast::Literal::Nil => Constant::Nil,
+                    crate::ast::Value::Int(i) => Constant::Int(*i),
+                    crate::ast::Value::Float(f) => Constant::Float(*f),
+                    crate::ast::Value::String(s) => Constant::String(s.clone()),
+                    crate::ast::Value::Bool(b) => Constant::Bool(*b),
+                    crate::ast::Value::Nil => Constant::Nil,
                 };
                 // Convert Constant to Value
                 let value = crate::core_types::Value::from(constant);
@@ -173,7 +173,7 @@ impl CodeGenerator {
                     Some(branch) => self.compile_node(branch)?,
                     None => {
                         let reg = self.allocate_register()?;
-                        self.chunk.add_instruction(Instruction::LDI(reg, crate::core_types::Value::Nil));
+                        self.chunk.add_instruction(Instruction::LDI(reg, crate::core_types::Value::Nil))
                     }
                 };
                 self.chunk.add_instruction(Instruction::MOV(condition_reg, else_reg));

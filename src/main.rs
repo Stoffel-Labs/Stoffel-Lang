@@ -12,6 +12,8 @@ mod errors;
 mod parser;
 mod suggestions;
 mod ufcs;
+#[cfg(test)]
+mod ufcs_tests;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
