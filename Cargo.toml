@@ -1,7 +1,11 @@
 [package]
 name = "stoffellang"
+description = "The compiler for Stoffel Lang, ideally a simple compiler with optimizations for Stoffel VM."
 authors = ["Gabriel Arrouye"]
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+colored = "2.0.0"
+unicode-width = "0.1.10"
+edit-distance = "2.1.0"

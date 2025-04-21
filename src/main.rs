@@ -1,12 +1,16 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process;
 
 mod ast;
+mod core_types;
 mod bytecode;
 mod codegen;
 mod lexer;
+mod errors;
 mod parser;
+mod suggestions;
 mod ufcs;
 
 fn main() {
@@ -26,22 +30,24 @@ fn main() {
     };
 
     println!("Compiling file: {}", filename);
+    let file_path = Path::new(filename);
+    let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
     // 1. Lexing
-    let tokens = match lexer::tokenize(&source) {
+    let tokens = match lexer::tokenize(&source, &file_name) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", e.format_with_colors());
             process::exit(1);
         }
     };
     println!("Tokens: {:?}", tokens); // Debug print
 
     // 2. Parsing
-    let ast_root = match parser::parse(&tokens) {
+    let ast_root = match parser::parse(&tokens, &file_name) {
         Ok(ast) => ast,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", e.format_with_colors());
             process::exit(1);
         }
     };
@@ -55,7 +61,7 @@ fn main() {
     let bytecode_chunk = match codegen::generate_bytecode(&transformed_ast) {
         Ok(chunk) => chunk,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", e.format_with_colors());
             process::exit(1);
         }
     };

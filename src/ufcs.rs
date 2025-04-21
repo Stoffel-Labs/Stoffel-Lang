@@ -35,7 +35,7 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
             op,
             operand: Box::new(transform_ufcs(*operand)),
         },
-        AstNode::FunctionDefinition { name, parameters, body } => AstNode::FunctionDefinition {
+        AstNode::FunctionDefinition { name, parameters, return_type, body, return_type_is_secret } => AstNode::FunctionDefinition {
             name,
             parameters,
             body: Box::new(transform_ufcs(*body)),
