@@ -6,6 +6,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-colored = "2.0.0"
-unicode-width = "0.1.10"
+colored = "3.0.0"
 edit-distance = "2.1.0"
+clap = { version = "4.5.4", features = ["derive"] }

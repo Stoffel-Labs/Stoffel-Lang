@@ -1,10 +1,4 @@
-use std::fmt;
-use crate::core_types::Value;
-
-// Keep these types for compatibility with existing code
-pub type ConstantIndex = u16;
-pub type JumpOffset = i16;
-pub type FunctionId = u32;
+pub(crate) use crate::core_types::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
@@ -61,9 +55,13 @@ pub enum ReducedOpcode {
     PUSHARG = 0x13,
     // CMP r1 r2
     CMP = 0x14,
+    // JMPLT <jump_to>
+    JMPLT = 0x15,
+    // JMPGT <jump_to>
+    JMPGT = 0x16,
 }
 
-/// Memory address or register operand
+/// Represents different kinds of operands for instructions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
     Register(usize),                   // A register (r0, r1, etc.)
@@ -72,7 +70,7 @@ pub enum Operand {
     Label(String),                     // A jump label
 }
 
-/// Instruction set matching ReducedOpcode
+/// Represents a single instruction in the bytecode.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Instruction {
     // Load value from stack to register
@@ -98,6 +96,8 @@ pub enum Instruction {
     JMP(String),                         // JMP label
     JMPEQ(String),                       // JMPEQ label
     JMPNEQ(String),                      // JMPNEQ label
+    JMPLT(String),                       // JMPLT label
+    JMPGT(String),                       // JMPGT label
     // Function handling
     CALL(String),                        // CALL function_name
     RET(usize),                          // RET r1
@@ -113,6 +113,14 @@ pub struct BytecodeChunk {
     pub labels: std::collections::HashMap<String, usize>,
 }
 
+/// Represents the complete compiled output, including the main code chunk
+/// and the bytecode for all defined functions.
+#[derive(Debug, Clone, Default)]
+pub struct CompiledProgram {
+    pub main_chunk: BytecodeChunk,
+    pub function_chunks: std::collections::HashMap<String, BytecodeChunk>,
+}
+
 impl BytecodeChunk {
     pub fn new() -> Self {
         Default::default()
@@ -126,12 +134,11 @@ impl BytecodeChunk {
     pub fn add_label(&mut self, label: String) -> usize {
         let pos = self.instructions.len();
         self.labels.insert(label, pos);
-        self.instructions.len() - 1
+        pos // Return the position (index) associated with the label
     }
 
-    pub fn add_constant(&mut self, constant: Constant) -> ConstantIndex {
-        // Avoid duplicates?
+    pub fn add_constant(&mut self, constant: Constant) -> usize {
         self.constants.push(constant);
-        (self.constants.len() - 1) as ConstantIndex
+        self.constants.len() - 1
     }
 }

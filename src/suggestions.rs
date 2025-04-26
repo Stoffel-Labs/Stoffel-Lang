@@ -1,7 +1,6 @@
 use edit_distance::edit_distance;
 use std::collections::HashMap;
 
-/// Suggests a correction for a misspelled identifier
 pub fn suggest_identifier(misspelled: &str, valid_identifiers: &[String]) -> Option<String> {
     if valid_identifiers.is_empty() {
         return None;
@@ -18,7 +17,6 @@ pub fn suggest_identifier(misspelled: &str, valid_identifiers: &[String]) -> Opt
         }
     }
 
-    // Only suggest if the distance is small enough relative to the length
     let threshold = (misspelled.len() as f64 * 0.4).max(2.0) as usize;
     if min_distance <= threshold {
         Some(best_match.clone())
@@ -27,7 +25,6 @@ pub fn suggest_identifier(misspelled: &str, valid_identifiers: &[String]) -> Opt
     }
 }
 
-/// Suggests a correction for a misspelled keyword
 pub fn suggest_keyword(misspelled: &str) -> Option<String> {
     let keywords = vec![
         "let", "var", "proc", "type", "object", "enum", "if", "else", "elif",
@@ -39,7 +36,6 @@ pub fn suggest_keyword(misspelled: &str) -> Option<String> {
     suggest_identifier(misspelled, &valid_keywords)
 }
 
-/// Suggests a fix for common syntax errors
 pub fn suggest_syntax_fix(error_message: &str) -> Option<String> {
     let suggestions = HashMap::from([
         ("unterminated string literal", "Add a closing double quote (\") to complete the string"),

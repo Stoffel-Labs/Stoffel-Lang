@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// Represents the location in source code where an error occurred
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceLocation {
     pub file: String,
     pub line: usize,
@@ -240,11 +240,21 @@ impl ErrorReporter {
     }
 }
 
+/// Formats the header line for compilation errors.
+pub fn format_error_header(count: usize) -> String {
+    use colored::*;
+    let s = if count == 1 { "" } else { "s" };
+    format!(
+        "Compilation failed with {} error{}:",
+        count.to_string().red().bold(), s.red().bold()
+    )
+}
+
 /// Helper function to extract source code snippet around an error location
-pub fn extract_source_snippet(source: &str, location: &SourceLocation, context_lines: usize) -> String {
-    let lines: Vec<&str> = source.lines().collect();
+pub fn extract_source_snippet(file: &str, location: &SourceLocation, context_lines: usize) -> String {
+    let lines: Vec<&str> = file.lines().collect();
     
-    if location.line == 0 || location.line > lines.len() {
+    if location.line == 0 || location.line > lines.len() || location.file == "<unknown>" {
         return String::new();
     }
 

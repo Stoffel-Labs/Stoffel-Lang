@@ -8,28 +8,28 @@ use crate::ast::AstNode;
 /// 4. Infix operator style: arg1.op(arg2) equivalent to op(arg1, arg2)
 pub fn transform_ufcs(node: AstNode) -> AstNode {
     match node {
-        AstNode::FunctionCall { function, arguments } => {
+        AstNode::FunctionCall { function, arguments, location } => {
             // Style 1: Transform obj.method(arg1, arg2) into method(obj, arg1, arg2)
-            if let AstNode::FieldAccess { object, field_name } = *function {
+            if let AstNode::FieldAccess { object, field_name, location: fa_location } = *function {
                 // Convert to MethodCall(object, method_name, args) or
-                // FunctionCall(Identifier(method_name), [object] + args)
-                // depending on canonical representation.
                 // Let's choose the latter for simplicity here.
                 let mut new_args = vec![*object];
                 new_args.extend(arguments.into_iter().map(transform_ufcs));
                 return AstNode::FunctionCall {
-                    function: Box::new(AstNode::Identifier(field_name)),
+                    function: Box::new(AstNode::Identifier(field_name, location)),
                     arguments: new_args,
+                    location: fa_location,
                 };
             }
-            // Recursively transform arguments and the function expression itself if needed
+            // Recursively transform arguments and the function expression itself
             AstNode::FunctionCall {
                 function: Box::new(transform_ufcs(*function)),
                 arguments: arguments.into_iter().map(transform_ufcs).collect(),
+                location,
             }
         },
         // Style 3: Transform command-style calls: obj method arg1 arg2
-        AstNode::CommandCall { command, arguments } => {
+        AstNode::CommandCall { command, arguments, location } => {
             // If the command is an identifier, transform to a regular function call
             // with the first argument as the object
             if !arguments.is_empty() {
@@ -45,21 +45,24 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                 return AstNode::FunctionCall {
                     function: Box::new(transform_ufcs(*command)),
                     arguments: new_args,
+                    location,
                 };
             }
-            // If no arguments, just transform to a regular function call
+            // If no arguments, just transform the command part
             AstNode::CommandCall {
                 command: Box::new(transform_ufcs(*command)),
                 arguments: arguments.into_iter().map(transform_ufcs).collect(),
+                location: Default::default(),
             }
         }
-        AstNode::FieldAccess { object, field_name } => {
+        AstNode::FieldAccess { object, field_name, location } => {
             // Style 4: Transform infix operator calls: a.op(b) into op(a, b)
             // Check if this field access is followed by a function call (handled in FunctionCall case)
             // Otherwise, leave it as is
             AstNode::FieldAccess {
                 object: Box::new(transform_ufcs(*object)),
                 field_name,
+                location,
             }
         },
         _ => node,
