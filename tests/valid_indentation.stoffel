@@ -1,0 +1,20 @@
+# Basic indentation
+let x = 10
+if x > 5:
+  let y = 20 # Indented block
+  # Another comment inside
+  y = y + 1
+let z = 30 # Dedented back to original level
+
+# Nested indentation
+if x < 100:
+  let a = 1
+  if a == 1:
+    let b = 2 # Double indent
+    b = b * x
+  let c = 3 # Back to single indent level
+let d = 4 # Back to top level
+
+# Empty block (requires parser support, e.g., 'pass' keyword or allowing empty blocks)
+# if x == 0:
+#   pass # Placeholder for an empty block

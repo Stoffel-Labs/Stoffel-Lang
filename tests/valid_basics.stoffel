@@ -1,0 +1,26 @@
+# This is a single-line comment
+
+# Literals
+let an_int = 42
+let a_float = 123.456 # Fixed point representation
+let a_string = "Hello, Stoffel!"
+let is_true = true
+let is_false = false
+let nothing = nil
+
+# Variable Declarations
+let immutable_val = 100 # Inferred type
+var mutable_val = "change me" # Inferred type
+
+let typed_int: int = 5
+var typed_string: string = "initial"
+
+let no_initial_value: int # Requires type annotation
+var mutable_no_initial: string # Requires type annotation
+
+# Assignments
+mutable_val = "changed"
+mutable_no_initial = "assigned now"
+
+# Simple expression statement (assuming function calls are expressions)
+# print("End of basic tests") # Requires function call parsing

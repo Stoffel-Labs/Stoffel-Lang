@@ -1,0 +1,25 @@
+# Syntax Errors
+
+# Unterminated string literal
+let bad_string = "This string never ends
+
+# Invalid character
+let invalid_char = 10 $ 5 # '$' is not a valid operator or character here
+
+# Expected expression after assignment
+let missing_value =
+
+# Expected identifier for variable name
+let 123_bad_name = 10
+
+# Unexpected token (e.g., keyword where identifier expected)
+# let let = 5 # Using keyword 'let' as variable name
+
+# Mismatched parentheses/brackets (if parser handles them)
+# let list = [1, 2, 3)
+
+# Missing colon after type annotation
+let typed_error: int = 42
+
+# Using operator incorrectly
+# let result = 5 + * 3 # Two operators together
