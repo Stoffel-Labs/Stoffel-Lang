@@ -8,7 +8,7 @@ use crate::ast::AstNode;
 /// 4. Infix operator style: arg1.op(arg2) equivalent to op(arg1, arg2)
 pub fn transform_ufcs(node: AstNode) -> AstNode {
     match node {
-        AstNode::FunctionCall { function, arguments, location } => {
+        AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
             // Style 1: Transform obj.method(arg1, arg2) into method(obj, arg1, arg2)
             if let AstNode::FieldAccess { object, field_name, location: fa_location } = *function {
                 // Convert to MethodCall(object, method_name, args) or
@@ -19,6 +19,7 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                     function: Box::new(AstNode::Identifier(field_name, location)),
                     arguments: new_args,
                     location: fa_location,
+                    resolved_return_type
                 };
             }
             // Recursively transform arguments and the function expression itself
@@ -26,10 +27,11 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                 function: Box::new(transform_ufcs(*function)),
                 arguments: arguments.into_iter().map(transform_ufcs).collect(),
                 location,
+                resolved_return_type
             }
         },
         // Style 3: Transform command-style calls: obj method arg1 arg2
-        AstNode::CommandCall { command, arguments, location } => {
+        AstNode::CommandCall { command, arguments, location, resolved_return_type } => {
             // If the command is an identifier, transform to a regular function call
             // with the first argument as the object
             if !arguments.is_empty() {
@@ -46,13 +48,14 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                     function: Box::new(transform_ufcs(*command)),
                     arguments: new_args,
                     location,
+                    resolved_return_type, // Pass the resolved type along
                 };
             }
             // If no arguments, just transform the command part
             AstNode::CommandCall {
                 command: Box::new(transform_ufcs(*command)),
                 arguments: arguments.into_iter().map(transform_ufcs).collect(),
-                location: Default::default(),
+                location, resolved_return_type // Keep type even if no args
             }
         }
         AstNode::FieldAccess { object, field_name, location } => {
@@ -68,4 +71,3 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
         _ => node,
     }
 }
-

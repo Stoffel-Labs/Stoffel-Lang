@@ -278,7 +278,7 @@ impl CodeGenerator {
                 }
             },
             // --- Control Flow & Functions ---
-            AstNode::FunctionCall { function, arguments, location } => {
+            AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
                 // 1. Identify the function name
                 // Semantic analysis already verified the function exists and is callable.
                 let function_name = match function.as_ref() {
@@ -295,12 +295,23 @@ impl CodeGenerator {
                     self.emit(Instruction::PUSHARG(arg_vr.0));
                     arg_vrs.push(arg_vr);
                 }
-                // Determine result secrecy from function signature (lookup needed)
-                let result_is_secret = false; // TODO: Lookup function signature for return type secrecy
+
+                // 4. Determine result type and secrecy from resolved type (added by semantic analysis)
+                let return_type = resolved_return_type.as_ref().cloned()
+                    .unwrap_or_else(|| {
+                        // Should not happen if semantic analysis ran correctly
+                        eprintln!("Warning: Function call node missing resolved return type during codegen for '{}'", function_name);
+                        SymbolType::Unknown
+                    });
+
+                let result_is_secret = return_type.is_secret();
                 let result_vr = self.allocate_virtual_register(result_is_secret);
 
                 self.emit(Instruction::CALL(function_name.clone()));
-                self.emit(Instruction::MOV(result_vr.0, 0)); // Assume result is in r0 (physical) after call
+                // Only move the result if the function actually returns something
+                if return_type != SymbolType::Void {
+                    self.emit(Instruction::MOV(result_vr.0, 0)); // Assume result is in r0 (physical) after call
+                }
 
                 Ok((result_vr, result_is_secret)) // Return the VR holding the result
             },

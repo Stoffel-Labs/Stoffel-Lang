@@ -496,6 +496,7 @@ impl<'a> Parser<'a> {
                     function: Box::new(left),
                     arguments,
                     location: operator_location, // Location of '('
+                    resolved_return_type: None, // Set to None during parsing
                 })
             }
             TokenKind::Dot => {

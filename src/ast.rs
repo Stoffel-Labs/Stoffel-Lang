@@ -1,4 +1,5 @@
 use crate::errors::SourceLocation;
+use crate::symbol_table::SymbolType;
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Value {
@@ -17,12 +18,9 @@ pub struct Parameter {
     pub is_secret: bool,
 }
 
-/// Represents a single pragma element.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pragma {
-    /// A simple identifier pragma, e.g., {.inline.}
     Simple(String, SourceLocation),
-    /// A key-value pragma, e.g., {.emit: "code".} (Value is an AST node)
     KeyValue(String, Box<AstNode>, SourceLocation),
 }
 
@@ -71,6 +69,7 @@ pub enum AstNode {
         function: Box<AstNode>,
         arguments: Vec<AstNode>,
         location: SourceLocation,
+        resolved_return_type: Option<SymbolType>,
     },
     NamedArgument {
         name: String,
@@ -170,6 +169,7 @@ pub enum AstNode {
         command: Box<AstNode>,
         arguments: Vec<AstNode>,
         location: SourceLocation,
+        resolved_return_type: Option<SymbolType>,
     },
     DiscardStatement {
         expression: Box<AstNode>,
@@ -226,8 +226,6 @@ impl AstNode {
         }
     }
 
-    /// Returns the source location of the AST node.
-    /// Panics if the node type doesn't store a location (should be avoided).
     pub fn location(&self) -> SourceLocation {
         match self {
             AstNode::Identifier(_, loc) => loc.clone(),

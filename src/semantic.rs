@@ -391,6 +391,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok((reconstructed_node, SymbolType::Void)) // Definition is a statement
             }
 
+            // --- Expressions and Control Flow ---
             AstNode::Block(statements) => {
                 // Blocks don't create scopes by default in this design.
                 // Scopes are handled by functions, loops (if needed), etc.
@@ -440,6 +441,130 @@ impl<'a> SemanticAnalyzer<'a> {
                  }
                  Ok((AstNode::Return(checked_expr_node), SymbolType::Void)) // Return is a statement
              }
+
+            AstNode::FunctionCall { function, arguments, location, resolved_return_type: _ } => { // Ignore existing resolved_return_type
+                // 1. Analyze the function expression itself (usually an identifier)
+                let (checked_function_node, function_expr_type) = self.analyze_node(*function)?;
+
+                // 2. Analyze arguments
+                let mut checked_arguments = Vec::with_capacity(arguments.len());
+                let mut argument_types = Vec::with_capacity(arguments.len());
+                for arg_node in arguments {
+                    let (checked_arg, arg_type) = self.analyze_node(arg_node)?;
+                    checked_arguments.push(checked_arg);
+                    argument_types.push(arg_type);
+                }
+
+                // 3. Determine the actual function symbol and its type
+                let (function_name, function_info) = match &checked_function_node {
+                    AstNode::Identifier(name, loc) => {
+                        if let Some(info) = self.symbol_table.lookup_symbol(name) {
+                            (name.clone(), info.clone()) // Clone info for use
+                        } else {
+                            self.error_reporter.add_error(CompilerError::semantic_error(
+                                format!("Use of undeclared function '{}'", name),
+                                loc.clone(),
+                            ));
+                            return Err(());
+                        }
+                    }
+                    // TODO: Handle other callable types (e.g., function pointers, methods)
+                    _ => {
+                        self.error_reporter.add_error(CompilerError::type_error(
+                            "Expression is not callable",
+                            checked_function_node.location(),
+                        ));
+                        return Err(());
+                    }
+                };
+
+                // 4. Check if the symbol is actually a function and validate arguments
+                let (expected_param_types, return_type) = match &function_info.kind {
+                    SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
+                        // TODO: Implement proper argument count and type checking
+                        // if parameters.len() != argument_types.len() { ... error ... }
+                        // for (expected, actual) in parameters.iter().zip(argument_types.iter()) { ... check type ... }
+                        (parameters.clone(), return_type.clone())
+                    }
+                    _ => {
+                        self.error_reporter.add_error(CompilerError::type_error(
+                            format!("'{}' is not a function", function_name),
+                            checked_function_node.location(),
+                        ));
+                        return Err(());
+                    }
+                };
+
+                // 5. Reconstruct the node with checked parts and resolved return type
+                let reconstructed_node = AstNode::FunctionCall {
+                    function: Box::new(checked_function_node),
+                    arguments: checked_arguments,
+                    location,
+                    resolved_return_type: Some(return_type.clone()), // Store the resolved type
+                };
+
+                Ok((reconstructed_node, return_type)) // Type of the call is the function's return type
+            }
+
+            AstNode::CommandCall { command, arguments, location, resolved_return_type } => {
+                // 1. Analyze the command expression (usually an identifier)
+                let (checked_command_node, command_expr_type) = self.analyze_node(*command)?;
+
+                // 2. Analyze arguments
+                let mut checked_arguments = Vec::with_capacity(arguments.len());
+                let mut argument_types = Vec::with_capacity(arguments.len());
+                for arg_node in arguments {
+                    let (checked_arg, arg_type) = self.analyze_node(arg_node)?;
+                    checked_arguments.push(checked_arg);
+                    argument_types.push(arg_type);
+                }
+
+                // 3. Determine the actual function symbol and its type from the command
+                let (function_name, function_info) = match &checked_command_node {
+                    AstNode::Identifier(name, loc) => {
+                        if let Some(info) = self.symbol_table.lookup_symbol(name) {
+                            (name.clone(), info.clone())
+                        } else {
+                            self.error_reporter.add_error(CompilerError::semantic_error(
+                                format!("Use of undeclared function '{}' in command call", name),
+                                loc.clone(),
+                            ));
+                            return Err(());
+                        }
+                    }
+                    _ => {
+                        self.error_reporter.add_error(CompilerError::type_error(
+                            "Command expression is not callable",
+                            checked_command_node.location(),
+                        ));
+                        return Err(());
+                    }
+                };
+
+                // 4. Check if the symbol is a function and validate arguments (similar to FunctionCall)
+                let (expected_param_types, return_type) = match &function_info.kind {
+                     SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
+                        // TODO: Implement proper argument count/type checking for command calls (UFCS context)
+                        (parameters.clone(), return_type.clone())
+                    }
+                    _ => {
+                        self.error_reporter.add_error(CompilerError::type_error(
+                            format!("'{}' is not a function (used in command call)", function_name),
+                            checked_command_node.location(),
+                        ));
+                        return Err(());
+                    }
+                };
+
+                // 5. Reconstruct the node with checked parts and resolved return type
+                let reconstructed_node = AstNode::CommandCall {
+                    command: Box::new(checked_command_node),
+                    arguments: checked_arguments,
+                    location,
+                    resolved_return_type: Some(return_type.clone()), // Store the resolved type
+                };
+                Ok((reconstructed_node, return_type)) // Type of the call is the function's return type
+            }
 
             // Fallback for unhandled nodes
             _ => {
