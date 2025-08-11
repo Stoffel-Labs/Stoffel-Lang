@@ -86,10 +86,10 @@ impl CodeGenerator {
                 let vr = self.allocate_virtual_register(false); // Literals are clear
                 let constant = match lit {
                     crate::ast::Value::Int(i) => Constant::Int(*i),
-                    crate::ast::Value::Float(f) => Constant::Float(*f),
+                    crate::ast::Value::Float(f) => Constant::Float(*f as i64),
                     crate::ast::Value::String(s) => Constant::String(s.clone()),
                     crate::ast::Value::Bool(b) => Constant::Bool(*b),
-                    crate::ast::Value::Nil => Constant::Nil,
+                    crate::ast::Value::Nil => Constant::Unit,
                 };
                 // Convert Constant to Value
                 let value = crate::core_types::Value::from(constant);
@@ -132,7 +132,7 @@ impl CodeGenerator {
                     }
                     None => { // No initial value, load default (Nil for now)
                         let vr = self.allocate_virtual_register(needs_secret);
-                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Nil)); // Load Nil
+                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit)); // Load Unit
                         (vr, needs_secret)
                     }
                 };
@@ -342,7 +342,7 @@ impl CodeGenerator {
                     None => {
                         // If no else, result type depends only on then branch.
                         let vr = self.allocate_virtual_register(then_is_secret);
-                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Nil));
+                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
                         (vr, then_is_secret)
                     }
                 };
@@ -377,9 +377,9 @@ impl CodeGenerator {
                 let (value_vr, value_is_secret) = match value {
                     Some(v) => self.compile_node(v)?,
                     None => {
-                        // Return Nil (assume clear default)
+                        // Return Unit (assume clear default)
                         let vr = self.allocate_virtual_register(false);
-                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Nil));
+                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
                         (vr, false)
                     }
                 };
@@ -432,9 +432,9 @@ impl CodeGenerator {
                 // Define the end label's position
                 self.add_label(end_loop_label);
 
-                // While loops evaluate to Nil
-                let nil_vr = self.allocate_virtual_register(false); // Nil is clear
-                self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Nil));
+                // While loops evaluate to Unit
+                let nil_vr = self.allocate_virtual_register(false); // Unit is clear
+                self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Unit));
                 Ok((nil_vr, false))
             },
             AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {

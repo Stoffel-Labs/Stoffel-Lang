@@ -17,6 +17,7 @@ mod semantic;
 mod suggestions;
 mod ufcs;
 mod register_allocator;
+mod binary_converter;
 
 /// Stoffel Language Compiler
 #[derive(ClapParser, Debug)]
@@ -25,6 +26,14 @@ struct CliArgs {
     /// The source file to compile
     #[arg(required = true)]
     filename: String,
+
+    /// Output binary file path
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Generate VM-compatible binary
+    #[arg(short = 'b', long)]
+    binary: bool,
 
     /// Print intermediate representations (Tokens, AST)
     #[arg(long)]
@@ -83,7 +92,30 @@ fn main() {
                 }
             }
             println!("------------------------");
-            // TODO: Output bytecode to a file or execute it
+            
+            // Generate VM-compatible binary if requested
+            if args.binary {
+                // Determine output file path
+                let output_path = match &args.output {
+                    Some(path) => path.clone(),
+                    None => {
+                        // Default to source filename with .stfb extension
+                        let mut default_path = file_path.with_extension("stfb").to_string_lossy().to_string();
+                        println!("No output file specified, using default: {}", default_path);
+                        default_path
+                    }
+                };
+                
+                // Convert to VM binary format
+                println!("Generating VM-compatible binary...");
+                let binary = binary_converter::convert_to_binary(&compiled_program);
+                
+                // Save to file
+                match binary_converter::save_to_file(&binary, &output_path) {
+                    Ok(_) => println!("Binary saved to {}", output_path),
+                    Err(e) => eprintln!("Error saving binary: {:?}", e),
+                }
+            }
         }
         Err(errors) => {
             eprintln!("\n{}", errors::format_error_header(errors.len())); // Use helper for consistent header

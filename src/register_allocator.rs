@@ -1,4 +1,5 @@
-use crate::bytecode::Instruction;
+use stoffel_vm_types::instructions::Instruction;
+use stoffel_vm_types::core_types::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 // --- Types ---
@@ -41,6 +42,7 @@ pub enum AllocationError {
 /// Computes the live intervals for all virtual registers in a sequence of instructions.
 /// This is a simplified version assuming basic blocks (no complex control flow analysis yet).
 pub fn analyze_liveness(instructions: &[Instruction]) -> HashMap<VirtualRegister, LiveInterval> {
+    use crate::register_allocator::InstructionRegisterAnalysis;
     let mut intervals: HashMap<VirtualRegister, LiveInterval> = HashMap::new();
     let mut last_use: HashMap<VirtualRegister, usize> = HashMap::new();
     let mut defined: HashMap<VirtualRegister, usize> = HashMap::new();
@@ -292,6 +294,7 @@ pub fn rewrite_instructions(
     allocation: &Allocation,
     k_clear: usize,
 ) -> Vec<Instruction> {
+    use crate::register_allocator::InstructionRegisterAnalysis;
     instructions
         .iter()
         .map(|inst| inst.remap_registers(allocation, k_clear))
@@ -299,11 +302,23 @@ pub fn rewrite_instructions(
 }
 
 
-// --- Helper methods on Instruction ---
+// --- Helper trait for Instruction register analysis ---
 
-impl Instruction {
+/// Trait providing register allocation helper methods for Instructions
+pub trait InstructionRegisterAnalysis {
     /// Returns a list of virtual registers defined (written to) by this instruction.
-    pub fn defs(&self) -> Vec<VirtualRegister> {
+    fn defs(&self) -> Vec<VirtualRegister>;
+    
+    /// Returns a list of virtual registers used (read from) by this instruction.
+    fn uses(&self) -> Vec<VirtualRegister>;
+    
+    /// Creates a new instruction with virtual registers replaced by physical registers.
+    fn remap_registers(&self, allocation: &Allocation, k_clear: usize) -> Instruction;
+}
+
+impl InstructionRegisterAnalysis for Instruction {
+    /// Returns a list of virtual registers defined (written to) by this instruction.
+    fn defs(&self) -> Vec<VirtualRegister> {
         match self {
             Instruction::LD(r, _) | Instruction::LDI(r, _) |
             Instruction::MOV(r, _) | Instruction::ADD(r, _, _) |
@@ -323,7 +338,7 @@ impl Instruction {
     }
 
     /// Returns a list of virtual registers used (read from) by this instruction.
-    pub fn uses(&self) -> Vec<VirtualRegister> {
+    fn uses(&self) -> Vec<VirtualRegister> {
         match self {
             Instruction::MOV(_, r_src) | Instruction::NOT(_, r_src) |
             Instruction::RET(r_src) | Instruction::PUSHARG(r_src)
@@ -345,7 +360,7 @@ impl Instruction {
 
     /// Creates a new instruction with virtual registers replaced by physical registers.
     /// Panics if a virtual register in the instruction is not found in the allocation map.
-    pub fn remap_registers(&self, allocation: &Allocation, k_clear: usize) -> Instruction {
+    fn remap_registers(&self, allocation: &Allocation, k_clear: usize) -> Instruction {
         let map_reg = |vr: usize| allocation.get(&VirtualRegister(vr))
                                         .expect("Virtual register not found in allocation map during rewrite")
                                         .0; // Get the usize physical register index

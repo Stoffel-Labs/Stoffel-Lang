@@ -13,7 +13,7 @@ pub enum TokenKind {
     Keyword(String),
     Operator(String),
     // Literals
-    IntLiteral(i64), // Includes different bases later
+    IntLiteral(i64), // Includes different bases later // TODO: need to impl all literals
     FloatLiteral(u64), // this is a fixed point
     StringLiteral(String),
     BoolLiteral(bool),
