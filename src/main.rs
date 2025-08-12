@@ -39,13 +39,16 @@ struct CliArgs {
     #[arg(long)]
     print_ir: bool,
 
-    /// Enable optimizations
-    #[arg(short, long)]
-    optimize: bool,
-
-    /// Set optimization level (0-3)
-    #[arg(short = 'O', long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+    /// Set optimization level (0-3). Accepts `-O3` or `-O 3`.
+    #[arg(short = 'O', long = "opt-level",
+          default_value_t = 0,
+          value_parser = clap::value_parser!(u8).range(0..=3),
+          value_name = "N")]
     opt_level: u8,
+
+    /// Enable optimizations (shorthand for -O2)
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "opt_level")]
+    optimize: bool,
 }
 
 fn main() {
