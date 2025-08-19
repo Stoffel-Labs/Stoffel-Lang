@@ -1,6 +1,5 @@
 use stoffel_vm_types::instructions::Instruction;
-use stoffel_vm_types::core_types::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 // --- Types ---
 
@@ -40,22 +39,31 @@ pub enum AllocationError {
 // --- Liveness Analysis ---
 
 /// Computes the live intervals for all virtual registers in a sequence of instructions.
-/// This is a simplified version assuming basic blocks (no complex control flow analysis yet).
+/// Legacy linear analysis wrapper (no CFG). Prefer `analyze_liveness_cfg_with_liveins`.
 pub fn analyze_liveness(instructions: &[Instruction]) -> HashMap<VirtualRegister, LiveInterval> {
+    analyze_liveness_with_liveins(instructions, &[])
+}
+
+/// Computes the live intervals for all virtual registers with an explicit set of live-in parameters.
+/// Legacy linear analysis wrapper (no CFG). Prefer `analyze_liveness_cfg_with_liveins`.
+pub fn analyze_liveness_with_liveins(
+    instructions: &[Instruction],
+    live_in: &[VirtualRegister],
+) -> HashMap<VirtualRegister, LiveInterval> {
     use crate::register_allocator::InstructionRegisterAnalysis;
     let mut intervals: HashMap<VirtualRegister, LiveInterval> = HashMap::new();
     let mut last_use: HashMap<VirtualRegister, usize> = HashMap::new();
     let mut defined: HashMap<VirtualRegister, usize> = HashMap::new();
 
-    // Helper to update interval end point
-    let update_end = |intervals: &mut HashMap<VirtualRegister, LiveInterval>, vr: VirtualRegister, end_point: usize| {
-        intervals.entry(vr).or_insert(LiveInterval { start: 0, end: 0 }).end = end_point;
-    };
+    // Seed live-in parameters as live from function entry (index 0)
+    for &vr in live_in {
+        intervals.entry(vr).or_insert(LiveInterval { start: 0, end: 0 });
+    }
 
     // Helper to update interval start point
-     let update_start = |intervals: &mut HashMap<VirtualRegister, LiveInterval>, vr: VirtualRegister, start_point: usize| {
-         intervals.entry(vr).or_insert(LiveInterval { start: 0, end: 0 }).start = start_point;
-     };
+    let update_start = |intervals: &mut HashMap<VirtualRegister, LiveInterval>, vr: VirtualRegister, start_point: usize| {
+        intervals.entry(vr).or_insert(LiveInterval { start: 0, end: 0 }).start = start_point;
+    };
 
     // First pass: Find definitions and last uses
     for (i, instruction) in instructions.iter().enumerate() {
@@ -94,6 +102,183 @@ pub fn analyze_liveness(instructions: &[Instruction]) -> HashMap<VirtualRegister
         if interval.end <= interval.start {
             interval.end = interval.start + 1;
         }
+    }
+
+    intervals
+}
+
+/// CFG-based liveness with explicit labels (block successors) and live-ins.
+/// Builds basic blocks, runs iterative dataflow to compute live-in/out, then per-instruction liveness,
+/// and finally collapses to single intervals per virtual register.
+pub fn analyze_liveness_cfg_with_liveins(
+    instructions: &[Instruction],
+    labels: &HashMap<String, usize>,
+    live_in: &[VirtualRegister],
+) -> HashMap<VirtualRegister, LiveInterval> {
+    use crate::register_allocator::InstructionRegisterAnalysis;
+    let n = instructions.len();
+    // Early exit
+    if n == 0 {
+        return HashMap::new();
+    }
+
+    // Collect all VRs seen
+    let mut all_vrs: HashSet<VirtualRegister> = HashSet::new();
+    for inst in instructions.iter() {
+        for u in inst.uses() { all_vrs.insert(u); }
+        for d in inst.defs() { all_vrs.insert(d); }
+    }
+    for &vr in live_in { all_vrs.insert(vr); }
+
+    // 1) Determine basic block boundaries
+    let mut block_starts: HashSet<usize> = HashSet::new();
+    block_starts.insert(0);
+    for &idx in labels.values() {
+        if idx < n { block_starts.insert(idx); }
+    }
+    for i in 0..n {
+        match &instructions[i] {
+            Instruction::JMP(_) | Instruction::JMPEQ(_) | Instruction::JMPNEQ(_) | Instruction::JMPLT(_) | Instruction::JMPGT(_) | Instruction::RET(_) => {
+                if i + 1 < n { block_starts.insert(i + 1); }
+            }
+            _ => {}
+        }
+    }
+    // Create sorted list of starts
+    let mut starts: Vec<usize> = block_starts.into_iter().collect();
+    starts.sort_unstable();
+    // Map: inst index -> block id
+    let mut inst2block: Vec<usize> = vec![0; n];
+    for (bi, &s) in starts.iter().enumerate() {
+        let end = starts.get(bi + 1).copied().unwrap_or(n);
+        for i in s..end { inst2block[i] = bi; }
+    }
+
+    #[derive(Default, Clone)]
+    struct BlockInfo {
+        start: usize,
+        end: usize, // exclusive
+        succs: Vec<usize>,
+        use_set: HashSet<VirtualRegister>,
+        def_set: HashSet<VirtualRegister>,
+    }
+
+    let mut blocks: Vec<BlockInfo> = Vec::with_capacity(starts.len());
+    for (bi, &s) in starts.iter().enumerate() {
+        let e = starts.get(bi + 1).copied().unwrap_or(n);
+        blocks.push(BlockInfo { start: s, end: e, ..Default::default() });
+    }
+
+    // 2) Compute successors per block
+    // Helper: get block id by instruction index
+    let label_to_block = |lbl: &String| -> Option<usize> { labels.get(lbl).and_then(|&idx| if idx < n { Some(inst2block[idx]) } else { None }) };
+    for bi in 0..blocks.len() {
+        if blocks[bi].start == blocks[bi].end { continue; }
+        let last_i = blocks[bi].end - 1;
+        match &instructions[last_i] {
+            Instruction::JMP(lbl) => {
+                if let Some(t) = label_to_block(lbl) { blocks[bi].succs.push(t); }
+            }
+            Instruction::JMPEQ(lbl) | Instruction::JMPNEQ(lbl) | Instruction::JMPLT(lbl) | Instruction::JMPGT(lbl) => {
+                if let Some(t) = label_to_block(lbl) { blocks[bi].succs.push(t); }
+                // fallthrough
+                if let Some(next_start) = starts.get(bi + 1).copied() { if next_start < n { blocks[bi].succs.push(bi + 1); } }
+            }
+            Instruction::RET(_) => { /* no successors */ }
+            _ => {
+                // fallthrough
+                if let Some(_next) = starts.get(bi + 1) { blocks[bi].succs.push(bi + 1); }
+            }
+        }
+        // Dedup succs
+        let mut uniq = HashSet::new();
+        blocks[bi].succs.retain(|s| uniq.insert(*s));
+    }
+
+    // 3) Compute use/def per block
+    for bi in 0..blocks.len() {
+        let b = &mut blocks[bi];
+        for i in b.start..b.end {
+            let inst = &instructions[i];
+            // uses
+            for u in inst.uses() {
+                if !b.def_set.contains(&u) { b.use_set.insert(u); }
+            }
+            // defs
+            for d in inst.defs() { b.def_set.insert(d); }
+        }
+    }
+
+    // 4) Iterative dataflow for live_in/live_out
+    let mut live_in_b: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); blocks.len()];
+    let mut live_out_b: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); blocks.len()];
+
+    // Seed entry live-ins
+    let entry_block = inst2block[0];
+    for &vr in live_in { live_in_b[entry_block].insert(vr); }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for bi in (0..blocks.len()).rev() {
+            // out[B] = union in[S]
+            let mut new_out: HashSet<VirtualRegister> = HashSet::new();
+            for &s in &blocks[bi].succs { new_out.extend(live_in_b[s].iter().copied()); }
+            // in[B] = use[B] ∪ (out[B] \ def[B])
+            let mut new_in = blocks[bi].use_set.clone();
+            for v in new_out.iter() { if !blocks[bi].def_set.contains(v) { new_in.insert(*v); } }
+            // Ensure seed live-ins at entry
+            if bi == entry_block { for &vr in live_in { new_in.insert(vr); } }
+
+            if new_out != live_out_b[bi] { live_out_b[bi] = new_out; changed = true; }
+            if new_in != live_in_b[bi] { live_in_b[bi] = new_in; changed = true; }
+        }
+    }
+
+    // 5) Per-instruction liveness within each block (backwards)
+    let mut live_in_inst: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); n];
+    let mut live_out_inst: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); n];
+
+    for bi in 0..blocks.len() {
+        let mut live: HashSet<VirtualRegister> = live_out_b[bi].clone();
+        // Walk backwards within block
+        for i in (blocks[bi].start..blocks[bi].end).rev() {
+            // out at i
+            live_out_inst[i] = live.clone();
+            // in at i = (out - defs) ∪ uses
+            let inst = &instructions[i];
+            // remove defs
+            for d in inst.defs() { live.remove(&d); }
+            // add uses
+            for u in inst.uses() { live.insert(u); }
+            live_in_inst[i] = live.clone();
+        }
+    }
+
+    // 6) Build intervals
+    let mut def_first: HashMap<VirtualRegister, usize> = HashMap::new();
+    for i in 0..n {
+        for d in instructions[i].defs() {
+            def_first.entry(d).and_modify(|e| { if i < *e { *e = i; } }).or_insert(i);
+        }
+    }
+
+    let mut intervals: HashMap<VirtualRegister, LiveInterval> = HashMap::new();
+    for vr in all_vrs.into_iter() {
+        // start
+        let mut start = def_first.get(&vr).copied().unwrap_or(usize::MAX);
+        // If live before any instruction, find earliest index where live_in is true
+        if start == usize::MAX {
+            for i in 0..n { if live_in_inst[i].contains(&vr) { start = i; break; } }
+        }
+        if start == usize::MAX { start = 0; }
+        // end = last i where live_out[i] contains vr => i+1
+        let mut end = 0usize;
+        for i in 0..n { if live_out_inst[i].contains(&vr) { end = i + 1; } }
+        // Ensure at least covers def-only
+        if let Some(&d) = def_first.get(&vr) { if end < d + 1 { end = d + 1; } }
+        if end <= start { end = start + 1; }
+        intervals.insert(vr, LiveInterval { start, end });
     }
 
     intervals
@@ -180,74 +365,97 @@ pub fn color_graph(
     k_clear: usize,
     k_secret: usize,
     secrecy_map: &HashMap<VirtualRegister, bool>,
+    precolored: &HashMap<VirtualRegister, PhysicalRegister>,
 ) -> Result<Allocation, AllocationError> {
-    let mut simplified_graph = graph.clone();
-    let mut allocation: Allocation = HashMap::new();
-    let mut node_stack: VecDeque<VirtualRegister> = VecDeque::new();
-    let k_total = k_clear + k_secret; // Total available registers
-
-    // --- Simplification Phase ---
-    // Find nodes with degree < k and push them onto the stack
-    let mut nodes_to_process: Vec<VirtualRegister> = simplified_graph.nodes.iter().cloned().collect();
-    nodes_to_process.sort_by_key(|vr| simplified_graph.degree(vr)); // Process lower degree nodes first
-
-    let mut temp_nodes = HashSet::new(); // Track nodes pushed to stack
-    while let Some(vr) = nodes_to_process.pop() {
-         // Determine the relevant 'k' based on the VR's secrecy requirement
-         let requires_secret = *secrecy_map.get(&vr).unwrap_or(&false); // Default to clear if not found? Should exist.
-         let k_limit = if requires_secret { k_secret } else { k_clear };
-
-         // Check if degree is less than the limit for *its specific pool*
-         // Note: This simplification check is less precise with pools. A node might
-         // interfere with many nodes from the *other* pool. A better check might be needed.
-         // For now, use the simple degree < k_total check, assignment phase handles pools.
-         if simplified_graph.degree(&vr) < k_total {
-             node_stack.push_back(vr);
-             temp_nodes.insert(vr); // Mark as pushed
-             simplified_graph.remove_node(&vr);
-             // Re-evaluate degrees of neighbors (could optimize this)
-             nodes_to_process = simplified_graph.nodes.iter().cloned().collect();
-             nodes_to_process.sort_by_key(|v| simplified_graph.degree(v));
-         } else {
-             // If no node with degree < k is left, but graph is not empty,
-             // we need to spill (or handle potential spills later).
-             // For now, push the highest degree node as a potential spill candidate.
-             if !simplified_graph.nodes.is_empty() {
-                 // Find node with highest degree among remaining
-                 if let Some(spill_candidate) = simplified_graph.nodes.iter()
-                    .max_by_key(|&v| simplified_graph.degree(v))
-                    .cloned()
-                 {
-                     // Find and remove the spill candidate from nodes_to_process
-                     if let Some(pos) = nodes_to_process.iter().position(|&v| v == spill_candidate) {
-                         nodes_to_process.remove(pos);
-                     } else {
-                         // Should not happen if nodes_to_process mirrors simplified_graph.nodes
-                         eprintln!("Warning: Spill candidate not found in process list.");
-                     }
-                     node_stack.push_back(spill_candidate);
-                     temp_nodes.insert(spill_candidate); // Mark as pushed
-                     simplified_graph.remove_node(&spill_candidate);
-                     // Re-evaluate degrees again
-                     nodes_to_process = simplified_graph.nodes.iter().cloned().collect();
-                     nodes_to_process.sort_by_key(|v| simplified_graph.degree(v));
-                 }
-             }
-         }
+    // --- Helpers to respect register pools ---
+    fn pool_degree(
+        g: &InterferenceGraph,
+        v: &VirtualRegister,
+        secrecy: &HashMap<VirtualRegister, bool>,
+    ) -> usize {
+        let my_secret = *secrecy
+            .get(v)
+            .expect("missing secrecy_map entry for virtual register");
+        g.neighbors(v)
+            .map(|ns| {
+                ns.iter()
+                    .filter(|n| *secrecy
+                        .get(*n)
+                        .expect("missing secrecy_map entry for virtual register")
+                        == my_secret)
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
+    fn pool_capacity(
+        v: &VirtualRegister,
+        k_clear: usize,
+        k_secret: usize,
+        secrecy: &HashMap<VirtualRegister, bool>,
+    ) -> usize {
+        if *secrecy
+            .get(v)
+            .expect("missing secrecy_map entry for virtual register")
+        {
+            k_secret
+        } else {
+            k_clear
+        }
+    }
+
+    let mut sg = graph.clone();
+    // Validate precolored mapping: forbid using reserved R0
+    for (_vr, _pr) in precolored.iter() {
+        // Allow precoloring to R0: parameters may live in the ABI return/arg register.
+    }
+
+    // Start with precolored allocation (e.g., ABI-fixed registers like parameters)
+    let mut allocation: Allocation = precolored.clone();
+    // Remove precolored nodes from the simplification graph so they are not recolored/spilled
+    for v in allocation.keys() {
+        if sg.nodes.contains(v) {
+            sg.remove_node(v);
+        }
+    }
+    let mut stack: Vec<VirtualRegister> = Vec::new();
+
+    // --- Simplification Phase (pool-aware) ---
+    while !sg.nodes.is_empty() {
+        if let Some(v) = sg
+            .nodes
+            .iter()
+            .copied()
+            .find(|v| pool_degree(&sg, v, secrecy_map) < pool_capacity(v, k_clear, k_secret, secrecy_map))
+        {
+            stack.push(v);
+            sg.remove_node(&v);
+            continue;
+        }
+
+        // Else pick a spill candidate (max pool degree)
+        let spill = sg
+            .nodes
+            .iter()
+            .copied()
+            .max_by_key(|v| pool_degree(&sg, v, secrecy_map))
+            .expect("graph had nodes but none found");
+        stack.push(spill);
+        sg.remove_node(&spill);
+    }
 
     // --- Assignment Phase ---
     let mut spilled_nodes = Vec::new();
-    while let Some(vr) = node_stack.pop_back() {
-        let requires_secret = *secrecy_map.get(&vr)
-            .expect("Virtual register missing from secrecy map during allocation");
+    while let Some(vr) = stack.pop() {
+        let requires_secret = *secrecy_map
+            .get(&vr)
+            .expect("missing secrecy_map entry for virtual register");
 
         // Define the pool of potential physical registers for this VR
         let allowed_regs_range = if requires_secret {
             k_clear..(k_clear + k_secret)
         } else {
-            0..k_clear
+            1..k_clear // Reserve physical R0 (0) for ABI return value
         };
         let mut available_colors_in_pool: HashSet<PhysicalRegister> = allowed_regs_range
             .map(PhysicalRegister)
@@ -257,20 +465,17 @@ pub fn color_graph(
         if let Some(original_neighbors) = graph.neighbors(&vr) {
             for neighbor in original_neighbors {
                 if let Some(physical_reg) = allocation.get(neighbor) {
-                    // Remove the neighbor's color only if it falls within our allowed pool
-                    // (Though technically, we just need to know it's unavailable)
                     available_colors_in_pool.remove(physical_reg);
                 }
             }
         }
 
-        // Assign the lowest available color *from the allowed pool*
-        if let Some(assigned_color) = available_colors_in_pool.iter().min() {
-            allocation.insert(vr, *assigned_color);
+        // Assign the lowest available color from the allowed pool
+        if let Some(&c) = available_colors_in_pool.iter().min() {
+            allocation.insert(vr, c);
         } else {
             // No color available - this node needs to be spilled
             spilled_nodes.push(vr);
-            return Err(AllocationError::PoolExhausted(vr, requires_secret));
         }
     }
 
@@ -284,21 +489,36 @@ pub fn color_graph(
 // --- Instruction Rewriting ---
 
 /// Helper to check if a physical register index is in the secret range
-pub fn is_secret_register(reg_index: usize, k_clear: usize) -> bool {
-    reg_index >= k_clear
-}
-
 /// Rewrites instructions using virtual registers to use allocated physical registers.
 pub fn rewrite_instructions(
     instructions: &[Instruction],
     allocation: &Allocation,
-    k_clear: usize,
 ) -> Vec<Instruction> {
     use crate::register_allocator::InstructionRegisterAnalysis;
-    instructions
-        .iter()
-        .map(|inst| inst.remap_registers(allocation, k_clear))
-        .collect()
+    let mut out: Vec<Instruction> = Vec::with_capacity(instructions.len());
+    let mut last_was_call = false;
+    for inst in instructions.iter() {
+        match inst {
+            // Special-case: right after a CALL, a MOV to capture return value.
+            // If src is virtual register 0 in the IR, it was intended to mean ABI R0.
+            // Emit MOV(dest_phys, 0) using physical R0 for the source.
+            Instruction::MOV(dest_vr, src_vr) if last_was_call && *src_vr == 0 => {
+                let dest_pr = allocation
+                    .get(&VirtualRegister(*dest_vr))
+                    .expect("Virtual register not found in allocation map during rewrite (MOV dest after CALL)")
+                    .0;
+                out.push(Instruction::MOV(dest_pr, 0));
+                last_was_call = false; // handled
+                continue;
+            }
+            _ => {}
+        }
+        // Default remapping path
+        let rewritten = inst.remap_registers(allocation);
+        last_was_call = matches!(inst, Instruction::CALL(_));
+        out.push(rewritten);
+    }
+    out
 }
 
 
@@ -313,7 +533,7 @@ pub trait InstructionRegisterAnalysis {
     fn uses(&self) -> Vec<VirtualRegister>;
     
     /// Creates a new instruction with virtual registers replaced by physical registers.
-    fn remap_registers(&self, allocation: &Allocation, k_clear: usize) -> Instruction;
+    fn remap_registers(&self, allocation: &Allocation) -> Instruction;
 }
 
 impl InstructionRegisterAnalysis for Instruction {
@@ -326,13 +546,13 @@ impl InstructionRegisterAnalysis for Instruction {
             Instruction::DIV(r, _, _) | Instruction::MOD(r, _, _) |
             Instruction::AND(r, _, _) | Instruction::OR(r, _, _) |
             Instruction::XOR(r, _, _) | Instruction::NOT(r, _) |
-            Instruction::SHL(r, _, _) | Instruction::SHR(r, _, _) |
-            Instruction::RET(r) | Instruction::PUSHARG(r) // RET/PUSHARG don't strictly define, but are often the last use
+            Instruction::SHL(r, _, _) | Instruction::SHR(r, _, _)
             => vec![VirtualRegister(*r)],
+            // no defs here:
+            Instruction::RET(_) | Instruction::PUSHARG(_) |
             Instruction::CMP(_, _) | Instruction::JMP(_) |
             Instruction::JMPEQ(_) | Instruction::JMPNEQ(_) |
-            Instruction::JMPLT(_) | Instruction::JMPGT(_) |
-            Instruction::CALL(_)
+            Instruction::JMPLT(_) | Instruction::JMPGT(_) | Instruction::CALL(_)
             => vec![], // These don't define registers in the typical sense
         }
     }
@@ -360,7 +580,7 @@ impl InstructionRegisterAnalysis for Instruction {
 
     /// Creates a new instruction with virtual registers replaced by physical registers.
     /// Panics if a virtual register in the instruction is not found in the allocation map.
-    fn remap_registers(&self, allocation: &Allocation, k_clear: usize) -> Instruction {
+    fn remap_registers(&self, allocation: &Allocation) -> Instruction {
         let map_reg = |vr: usize| allocation.get(&VirtualRegister(vr))
                                         .expect("Virtual register not found in allocation map during rewrite")
                                         .0; // Get the usize physical register index

@@ -6,7 +6,7 @@ pub use stoffel_vm_types::core_types::{Value, ShareType, Upvalue, Closure};
 impl From<crate::bytecode::Constant> for Value {
     fn from(constant: crate::bytecode::Constant) -> Self {
         match constant {
-            crate::bytecode::Constant::Int(i) => Value::I64(i),
+            crate::bytecode::Constant::I64(i) => Value::I64(i),
             crate::bytecode::Constant::I32(i) => Value::I32(i),
             crate::bytecode::Constant::I16(i) => Value::I16(i),
             crate::bytecode::Constant::I8(i) => Value::I8(i),

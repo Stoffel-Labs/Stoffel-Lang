@@ -17,7 +17,16 @@ pub enum SymbolKind {
 /// TODO: This needs to be more sophisticated to handle generics, objects, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolType {
-    Int,
+    // Signed integers
+    Int64,
+    Int32,
+    Int16,
+    Int8,
+    // Unsigned integers
+    UInt64,
+    UInt32,
+    UInt16,
+    UInt8,
     Float,
     String,
     Bool,
@@ -43,12 +52,95 @@ impl SymbolType {
         }
     }
 
+    /// Returns true if this is any integer type (signed or unsigned).
+    pub fn is_integer(&self) -> bool {
+        matches!(self.underlying_type(),
+            SymbolType::Int64 | SymbolType::Int32 | SymbolType::Int16 | SymbolType::Int8 |
+            SymbolType::UInt64 | SymbolType::UInt32 | SymbolType::UInt16 | SymbolType::UInt8)
+    }
+
+    /// Returns true if integer and signed; false if integer and unsigned; otherwise false.
+    pub fn is_signed(&self) -> bool {
+        match self.underlying_type() {
+            SymbolType::Int64 | SymbolType::Int32 | SymbolType::Int16 | SymbolType::Int8 => true,
+            SymbolType::UInt64 | SymbolType::UInt32 | SymbolType::UInt16 | SymbolType::UInt8 => false,
+            _ => false,
+        }
+    }
+
+    /// Returns bit width for integer types.
+    pub fn bit_width(&self) -> Option<u8> {
+        match self.underlying_type() {
+            SymbolType::Int64 | SymbolType::UInt64 => Some(64),
+            SymbolType::Int32 | SymbolType::UInt32 => Some(32),
+            SymbolType::Int16 | SymbolType::UInt16 => Some(16),
+            SymbolType::Int8  | SymbolType::UInt8  => Some(8),
+            _ => None,
+        }
+    }
+
+    /// Returns the inclusive min value for this integer type as i128.
+    pub fn min_value_i128(&self) -> Option<i128> {
+        if !self.is_integer() { return None; }
+        let bits_u8 = self.bit_width().unwrap();
+        let bits: u32 = bits_u8 as u32;
+        if self.is_signed() {
+            Some(-(1i128 << (bits - 1)))
+        } else {
+            Some(0)
+        }
+    }
+
+    /// Returns the inclusive max value for this integer type as i128.
+    pub fn max_value_i128(&self) -> Option<i128> {
+        if !self.is_integer() { return None; }
+        let bits_u8 = self.bit_width().unwrap();
+        let bits: u32 = bits_u8 as u32;
+        if self.is_signed() {
+            Some((1i128 << (bits - 1)) - 1)
+        } else {
+            Some((1i128 << bits) - 1)
+        }
+    }
+
+    /// Checks if a literal value fits within this integer type.
+    pub fn fits_literal_i128(&self, value: i128) -> bool {
+        match (self.min_value_i128(), self.max_value_i128()) {
+            (Some(min), Some(max)) => value >= min && value <= max,
+            _ => false,
+        }
+    }
+
+    /// Returns true if converting any value of `self` to `target` is safe (implicit widening).
+    /// Conservative: allows signed->signed widening, unsigned->unsigned widening,
+    /// and unsigned->signed only if target bit width > source bit width.
+    pub fn can_widen_to(&self, target: &SymbolType) -> bool {
+        let src = self.underlying_type();
+        let dst = target.underlying_type();
+        if !src.is_integer() || !dst.is_integer() { return false; }
+        let src_bits = src.bit_width().unwrap();
+        let dst_bits = dst.bit_width().unwrap();
+        match (src.is_signed(), dst.is_signed()) {
+            (true, true) => src_bits <= dst_bits,
+            (false, false) => src_bits <= dst_bits,
+            (false, true) => src_bits < dst_bits, // e.g., u8 -> i16 (ok), u8 -> i8 (not safe for all values)
+            (true, false) => false, // signed to unsigned not always safe
+        }
+    }
+
     /// Creates a SymbolType from an AST node representing a type annotation.
     /// This is a simplified version.
     pub fn from_ast(node: &AstNode) -> Self {
         match node {
             AstNode::Identifier(name, _) => match name.as_str() {
-                "int" => SymbolType::Int,
+                "int64" => SymbolType::Int64,
+                "int32" => SymbolType::Int32,
+                "int16" => SymbolType::Int16,
+                "int8" => SymbolType::Int8,
+                "uint64" => SymbolType::UInt64,
+                "uint32" => SymbolType::UInt32,
+                "uint16" => SymbolType::UInt16,
+                "uint8" => SymbolType::UInt8,
                 "float" => SymbolType::Float,
                 "string" => SymbolType::String,
                 "bool" => SymbolType::Bool,
@@ -167,8 +259,12 @@ impl SymbolTable {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
         }
 
-        // Add built-in types (int, string, bool, float, nil, void)
-        for type_name in ["int", "string", "bool", "float", "nil", "void"] {
+        // Add built-in types (integers, string, bool, float, nil, void)
+        for type_name in [
+            "int64", "int32", "int16", "int8",
+            "uint64", "uint32", "uint16", "uint8",
+            "string", "bool", "float", "nil", "void"
+        ] {
              let type_info = SymbolInfo {
                  name: type_name.to_string(),
                  kind: SymbolKind::Type,

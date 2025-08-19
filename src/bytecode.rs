@@ -4,7 +4,7 @@ pub(crate) use stoffel_vm_types::instructions::Instruction;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constant {
     /// 64-bit signed integer
-    Int(i64),
+    I64(i64),
     /// 32-bit signed integer
     I32(i32),
     /// 16-bit signed integer

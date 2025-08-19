@@ -20,6 +20,52 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    fn int_literal_value(node: &AstNode) -> Option<i128> {
+        if let AstNode::Literal(Value::Int(i)) = node { Some(*i as i128) } else { None }
+    }
+
+    fn check_integer_compat(&mut self, src_node: Option<&AstNode>, src_type: &SymbolType, dst_type: &SymbolType, location: crate::errors::SourceLocation) -> Result<(), ()> {
+        // Only enforce special rules if destination is integer
+        if dst_type.is_integer() {
+            // 1) Literal fits check
+            if let Some(val) = src_node.and_then(Self::int_literal_value) {
+                if !dst_type.fits_literal_i128(val) {
+                    let min = dst_type.min_value_i128().unwrap();
+                    let max = dst_type.max_value_i128().unwrap();
+                    self.error_reporter.add_error(CompilerError::type_error(
+                        format!("Integer literal {} does not fit in '{}' (allowed range {}..={})", val, declared_type_to_string(dst_type), min, max),
+                        location,
+                    ));
+                    return Err(());
+                }
+                return Ok(());
+            }
+            // 2) Type-to-type compatibility
+            if src_type.is_integer() {
+                if src_type.underlying_type() == dst_type.underlying_type() {
+                    return Ok(());
+                }
+                if src_type.can_widen_to(dst_type) {
+                    return Ok(());
+                }
+                self.error_reporter.add_error(CompilerError::type_error(
+                    format!("Cannot implicitly convert from '{}' to '{}'", declared_type_to_string(src_type), declared_type_to_string(dst_type)),
+                    location,
+                ));
+                return Err(());
+            }
+        }
+        // Fallback: require underlying types to match
+        if src_type.underlying_type() != dst_type.underlying_type() && *dst_type != SymbolType::Unknown && *src_type != SymbolType::Unknown {
+            self.error_reporter.add_error(CompilerError::type_error(
+                format!("Type mismatch. Expected '{}', found '{}'", declared_type_to_string(dst_type), declared_type_to_string(src_type)),
+                location,
+            ));
+            return Err(());
+        }
+        Ok(())
+    }
+
     /// Performs semantic analysis (declaration and resolution passes).
     /// Returns the potentially annotated AST or errors.
     pub fn analyze(&mut self, node: AstNode) -> Result<AstNode, ()> {
@@ -177,6 +223,27 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.populate_symbols(condition)?;
                 self.populate_symbols(body)?;
             }
+            AstNode::ForLoop { variables, iterable, body, location: _ } => {
+                // For-loops introduce a new scope for loop variables
+                // 1. Traverse the iterable expression
+                self.populate_symbols(iterable)?;
+                // 2. Enter loop scope and declare loop variables (typed as int for now)
+                self.symbol_table.enter_scope();
+                for var_name in variables {
+                    let info = SymbolInfo {
+                        name: var_name.clone(),
+                        kind: SymbolKind::Variable { is_mutable: false },
+                        symbol_type: SymbolType::Int64,
+                        is_secret: false,
+                        defined_at: node.location(),
+                    };
+                    self.symbol_table.declare_symbol(info);
+                }
+                // 3. Traverse the loop body
+                self.populate_symbols(body)?;
+                // 4. Exit loop scope
+                self.symbol_table.exit_scope();
+            }
             AstNode::Assignment { target, value, .. } => {
                 // Assignments don't declare new symbols, but we need to traverse
                 // in case the value expression contains declarations (e.g., lambda)
@@ -224,12 +291,12 @@ impl<'a> SemanticAnalyzer<'a> {
         match node {
             // --- Leaf Nodes ---
             AstNode::Literal(value) => Ok((AstNode::Literal(value.clone()), match value {
-                Value::Int(_) => SymbolType::Int,
+                Value::Int(_) => SymbolType::Int64,
                 Value::Float(_) => SymbolType::Float,
                 Value::String(_) => SymbolType::String,
                 Value::Bool(_) => SymbolType::Bool,
                 Value::Nil => SymbolType::Nil,
-            })),
+            })), 
             AstNode::Identifier(name, location) => {
                 if let Some(info) = self.symbol_table.lookup_symbol(name.as_str()) {
                     // TODO: Mark symbol as used (for warnings)
@@ -248,6 +315,33 @@ impl<'a> SemanticAnalyzer<'a> {
             }
 
             // --- Declarations and Statements ---
+            AstNode::Assignment { target, value, location } => {
+                // Analyze target and value to get types
+                let (checked_target, target_type) = self.analyze_node(*target)?;
+                let (checked_value, value_type) = self.analyze_node(*value)?;
+
+                // Only support simple identifier targets for type checking for now
+                let loc = location.clone();
+                if let AstNode::Identifier(_, _) = checked_target {
+                    // Enforce integer compatibility (includes literal range check)
+                    if self.check_integer_compat(Some(&checked_value), &value_type, &target_type, loc.clone()).is_err() {
+                        return Err(());
+                    }
+                    Ok((AstNode::Assignment {
+                        target: Box::new(checked_target),
+                        value: Box::new(checked_value),
+                        location: location,
+                    }, SymbolType::Void))
+                } else {
+                    // For non-identifier targets, keep previous basic behavior (no type enforcement yet)
+                    Ok((AstNode::Assignment {
+                        target: Box::new(checked_target),
+                        value: Box::new(checked_value),
+                        location: location,
+                    }, SymbolType::Void))
+                }
+            }
+
             AstNode::VariableDeclaration { name, type_annotation, value, is_mutable, is_secret, location } => {
                 // 1. Analyze the value expression first (if it exists)
                 let mut checked_value_node = None;
@@ -265,13 +359,11 @@ impl<'a> SemanticAnalyzer<'a> {
                     .map(|tn| SymbolType::from_ast(tn))
                     .unwrap_or_else(|| value_type.clone()); // Infer if no annotation
 
-                // 3. Check for type consistency
-                if type_annotation.is_some() && value_type != SymbolType::Unknown && declared_type.underlying_type() != value_type.underlying_type() {
-                    self.error_reporter.add_error(CompilerError::type_error(
-                        format!("Mismatched types in variable declaration '{}'. Expected '{}', found '{}'", name, declared_type_to_string(&declared_type), declared_type_to_string(&value_type)),
-                        location.clone(),
-                    ));
-                    return Err(());
+                // 3. Check for type consistency (with integer width/range rules)
+                if type_annotation.is_some() && value_type != SymbolType::Unknown {
+                    if self.check_integer_compat(checked_value_node.as_deref(), &value_type, &declared_type, location.clone()).is_err() {
+                        return Err(());
+                    }
                 }
 
                 // 4. Handle 'secret' keyword and type secrecy
@@ -405,6 +497,56 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok((AstNode::Block(checked_statements), last_type))
             }
 
+            AstNode::ForLoop { variables, iterable, body, location } => {
+                // Support only single variable numeric ranges for now: for i in a .. b
+                if variables.len() != 1 {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        "For-loop with multiple variables not supported yet",
+                        location.clone(),
+                    ));
+                    return Err(());
+                }
+                // Analyze iterable
+                let (checked_iterable, _iter_type) = self.analyze_node(*iterable)?;
+                // Check it is a range binary op
+                match &checked_iterable {
+                    AstNode::BinaryOperation { op, left: _, right: _, location: op_loc } if op == ".." => {
+                        // ok
+                    }
+                    _ => {
+                        self.error_reporter.add_error(CompilerError::semantic_error(
+                            "Unsupported for-loop iterable; expected 'a .. b' range",
+                            checked_iterable.location(),
+                        ));
+                        return Err(());
+                    }
+                }
+                // Enter loop scope and declare the loop variable as int (clear)
+                self.symbol_table.enter_scope();
+                let var_name = variables[0].clone();
+                let var_info = SymbolInfo {
+                    name: var_name.clone(),
+                    kind: SymbolKind::Variable { is_mutable: false },
+                    symbol_type: SymbolType::Int64,
+                    is_secret: false,
+                    defined_at: location.clone(),
+                };
+                self.symbol_table.declare_symbol(var_info);
+
+                // Analyze body within scope
+                let (checked_body, _body_type) = self.analyze_node(*body)?;
+
+                // Exit loop scope
+                self.symbol_table.exit_scope();
+
+                Ok((AstNode::ForLoop {
+                    variables: vec![var_name],
+                    iterable: Box::new(checked_iterable),
+                    body: Box::new(checked_body),
+                    location,
+                }, SymbolType::Void))
+            }
+
             AstNode::Return(ref maybe_expr) => {
                  let (checked_expr_node, return_value_type) = match maybe_expr {
                      Some(expr) => {
@@ -414,19 +556,12 @@ impl<'a> SemanticAnalyzer<'a> {
                      None => (None, SymbolType::Void),
                  };
 
-                 match &self.current_function_return_type {
+                 let expected_ret = self.current_function_return_type.clone();
+                 match expected_ret {
                      Some(expected) => {
-                         // Check compatibility (ignoring secrecy for now, handled by type itself)
-                         if expected.underlying_type() != return_value_type.underlying_type() &&
-                            *expected != SymbolType::Unknown && return_value_type != SymbolType::Unknown &&
-                            *expected != SymbolType::Void && return_value_type != SymbolType::Void && // Allow void mismatch?
-                            *expected != SymbolType::Nil && return_value_type != SymbolType::Nil // Allow nil mismatch?
-                         {
-                             let location = node.location();
-                             self.error_reporter.add_error(CompilerError::type_error(
-                                 format!("Mismatched return type. Function expects '{}', but found '{}'", declared_type_to_string(expected), declared_type_to_string(&return_value_type)),
-                                 location,
-                             ));
+                         // Integer-aware compatibility (includes literal range check)
+                         let loc = node.location();
+                         if self.check_integer_compat(checked_expr_node.as_deref(), &return_value_type, &expected, loc).is_err() {
                              return Err(());
                          }
                          // TODO: Check secrecy compatibility (cannot return clear from secret context, etc.)
@@ -495,7 +630,15 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 };
 
-                // 5. Reconstruct the node with checked parts and resolved return type
+                // 5. Validate arguments using integer compatibility rules
+                for (idx, (expected_ty, actual_ty)) in expected_param_types.iter().zip(argument_types.iter()).enumerate() {
+                    let arg_loc = checked_arguments[idx].location();
+                    if self.check_integer_compat(Some(&checked_arguments[idx]), actual_ty, expected_ty, arg_loc).is_err() {
+                        return Err(());
+                    }
+                }
+
+                // 6. Reconstruct the node with checked parts and resolved return type
                 let reconstructed_node = AstNode::FunctionCall {
                     function: Box::new(checked_function_node),
                     arguments: checked_arguments,
@@ -556,7 +699,15 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 };
 
-                // 5. Reconstruct the node with checked parts and resolved return type
+                // 5. Validate arguments using integer compatibility rules (same as function calls)
+                for (idx, (expected_ty, actual_ty)) in expected_param_types.iter().zip(argument_types.iter()).enumerate() {
+                    let arg_loc = checked_arguments[idx].location();
+                    if self.check_integer_compat(Some(&checked_arguments[idx]), actual_ty, expected_ty, arg_loc).is_err() {
+                        return Err(());
+                    }
+                }
+
+                // 6. Reconstruct the node with checked parts and resolved return type
                 let reconstructed_node = AstNode::CommandCall {
                     command: Box::new(checked_command_node),
                     arguments: checked_arguments,
@@ -582,7 +733,16 @@ impl<'a> SemanticAnalyzer<'a> {
 // TODO: Move this into SymbolType impl or a dedicated formatter module
 fn declared_type_to_string(sym_type: &SymbolType) -> String {
     match sym_type {
-        SymbolType::Int => "int".to_string(),
+        // Signed integers
+        SymbolType::Int64 => "int64".to_string(),
+        SymbolType::Int32 => "int32".to_string(),
+        SymbolType::Int16 => "int16".to_string(),
+        SymbolType::Int8 => "int8".to_string(),
+        // Unsigned integers
+        SymbolType::UInt64 => "uint64".to_string(),
+        SymbolType::UInt32 => "uint32".to_string(),
+        SymbolType::UInt16 => "uint16".to_string(),
+        SymbolType::UInt8 => "uint8".to_string(),
         SymbolType::Float => "float".to_string(),
         SymbolType::String => "string".to_string(),
         SymbolType::Bool => "bool".to_string(),

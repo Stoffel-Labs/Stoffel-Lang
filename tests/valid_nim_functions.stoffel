@@ -1,5 +1,5 @@
 # Basic Nim-style function definition
-proc add(a: int, b: int): int =
+proc add(a: int64, b: int64): int64 =
   return a + b
 
 proc print(msg: string) {.builtin.} =
@@ -18,7 +18,7 @@ proc log_message(msg: string) =
   discard msg # Use discard if value isn't used
 
 # Secret function definition
-secret proc calculate_secret(input: int): int =
+secret proc calculate_secret(input: int64): int64 =
   let intermediate = input * 2 + 7
   return intermediate # Implementation is hidden
 
@@ -39,7 +39,7 @@ proc transform_secret(key: secret string): secret string =
   return key # Simplified
 
 # Secret function with secret parameter and return type
-secret proc super_secret_op(val: secret int): secret int =
+secret proc super_secret_op(val: secret int64): secret int64 =
   return val + 1 # Simplified
 
 # Function definition spanning multiple lines (body indentation)

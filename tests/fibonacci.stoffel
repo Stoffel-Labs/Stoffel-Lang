@@ -1,0 +1,21 @@
+# Fibonacci sample that returns 55 for input n=10
+# Uses an iterative approach with a running pair (a, b).
+
+proc main() =
+  let n = 10
+
+  if n == 0:
+    return 0
+  else:
+    if n == 1:
+      return 1
+    else:
+      let a = 0
+      let b = 1
+
+      for i in 2 .. n:
+        let next = a + b
+        a = b
+        b = next
+
+      return b

@@ -19,7 +19,7 @@ let 123_bad_name = 10
 # let list = [1, 2, 3)
 
 # Missing colon after type annotation
-let typed_error: int = 42
+let typed_error: int64 = 42
 
 # Using operator incorrectly
 # let result = 5 + * 3 # Two operators together

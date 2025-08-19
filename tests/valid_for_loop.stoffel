@@ -1,0 +1,17 @@
+# Example program that should parse correctly
+
+proc main() =
+  let total = 0
+
+  # Iterate over a simple integer range
+  for i in 0 .. 4:
+    if i < 2:
+      let doubled = i + i
+      discard doubled
+    else:
+      let tmp = i * 2
+      discard tmp
+
+  # Simple while loop to exercise loops and assignments
+  while total < 10:
+    total = total + 1

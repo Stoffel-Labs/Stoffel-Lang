@@ -36,6 +36,9 @@ pub fn convert_to_binary(program: &CompiledProgram) -> CompiledBinary {
     
     // Maps for tracking constants and functions
     let mut constant_map: HashMap<Value, usize> = HashMap::new();
+
+    // Pre-scan to infer function arities from call sites (PUSHARG ... CALL <name>)
+    let arity_map = infer_function_arities(program);
     
     // Convert main chunk
     let main_function = convert_chunk_to_function(
@@ -44,6 +47,7 @@ pub fn convert_to_binary(program: &CompiledProgram) -> CompiledBinary {
         &program.main_chunk, 
         &mut constant_map,
         None, // Main has no parent
+        &arity_map,
     );
     binary.functions.push(main_function);
     
@@ -67,6 +71,7 @@ pub fn convert_to_binary(program: &CompiledProgram) -> CompiledBinary {
             chunk, 
             &mut constant_map,
             parent,
+            &arity_map,
         );
         binary.functions.push(function);
     }
@@ -96,18 +101,25 @@ fn convert_chunk_to_function(
     chunk: &BytecodeChunk,
     constant_map: &mut HashMap<Value, usize>,
     parent: Option<String>,
+    arity_map: &HashMap<String, usize>,
 ) -> CompiledFunction {
-    // Extract parameters from function name (if any)
-    // Format: function_name(param1, param2, ...)
-    let mut parameters = Vec::new();
+    // Determine parameters: prefer explicit names parsed from the function name if present,
+    // otherwise infer arity from call sites and generate placeholder names (arg0, arg1, ...).
+    let mut parameters: Vec<String> = Vec::new();
     if let Some(params_start) = name.find('(') {
         if let Some(params_end) = name.find(')') {
             let params_str = &name[params_start + 1..params_end];
             if !params_str.is_empty() {
-                parameters = params_str.split(',')
+                parameters = params_str
+                    .split(',')
                     .map(|s| s.trim().to_string())
                     .collect();
             }
+        }
+    }
+    if parameters.is_empty() {
+        if let Some(argc) = arity_map.get(name) {
+            parameters = (0..*argc).map(|i| format!("arg{}", i)).collect();
         }
     }
     
@@ -330,4 +342,39 @@ fn estimate_register_count(chunk: &BytecodeChunk) -> usize {
 /// A `Result` indicating success or failure
 pub fn save_to_file<P: AsRef<Path>>(binary: &CompiledBinary, path: P) -> BinaryResult<()> {
     stoffel_vm_types::compiled_binary::utils::save_to_file(binary, path)
+}
+
+/// Infers function arities by scanning for contiguous PUSHARG instructions immediately
+/// preceding CALL <function_name> instructions across all chunks.
+fn infer_function_arities(program: &CompiledProgram) -> HashMap<String, usize> {
+    fn scan_chunk(map: &mut HashMap<String, usize>, chunk: &BytecodeChunk) {
+        let instrs = &chunk.instructions;
+        for i in 0..instrs.len() {
+            if let Instruction::CALL(func_name) = &instrs[i] {
+                // Count contiguous PUSHARGs immediately before this CALL
+                let mut count = 0usize;
+                let mut j: isize = i as isize - 1;
+                while j >= 0 {
+                    match &instrs[j as usize] {
+                        Instruction::PUSHARG(_) => {
+                            count += 1;
+                            j -= 1;
+                        }
+                        _ => break,
+                    }
+                }
+                let entry = map.entry(func_name.clone()).or_insert(0);
+                if count > *entry {
+                    *entry = count;
+                }
+            }
+        }
+    }
+
+    let mut map: HashMap<String, usize> = HashMap::new();
+    scan_chunk(&mut map, &program.main_chunk);
+    for (_name, chunk) in &program.function_chunks {
+        scan_chunk(&mut map, chunk);
+    }
+    map
 }

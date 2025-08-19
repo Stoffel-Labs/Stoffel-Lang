@@ -12,10 +12,10 @@ let nothing = nil
 let immutable_val = 100 # Inferred type
 var mutable_val = "change me" # Inferred type
 
-let typed_int: int = 5
+let typed_int: int64 = 5
 var typed_string: string = "initial"
 
-let no_initial_value: int # Requires type annotation
+let no_initial_value: int64 # Requires type annotation
 var mutable_no_initial: string # Requires type annotation
 
 # Assignments

@@ -1,7 +1,7 @@
 use crate::ast::{AstNode, Pragma};
 use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction};
 use crate::errors::{CompilerError, CompilerResult};
-use crate::register_allocator::{self, AllocationError, VirtualRegister};
+use crate::register_allocator::{self, AllocationError, VirtualRegister, PhysicalRegister};
 use crate::symbol_table::SymbolType;
 
 use std::collections::HashMap;
@@ -26,10 +26,14 @@ struct CodeGenerator {
     symbol_table: HashMap<String, usize>,
     // Compiled functions.
     compiled_functions: HashMap<String, BytecodeChunk>,
+    // If present, this chunk represents a 'proc main' (main without return type) to be used as program entry.
+    main_proc_chunk: Option<BytecodeChunk>,
     // Known built-in functions (names only, no bytecode generated).
     known_builtins: HashSet<String>,
     // Pragma handlers: Maps pragma names to their handler functions.
     pragma_handlers: HashMap<String, PragmaHandler>,
+    // Constants identified during code generation for this chunk.
+    identified_constants: Vec<Constant>,
 }
 
 impl CodeGenerator {
@@ -42,8 +46,10 @@ impl CodeGenerator {
             // Symbol table starts empty for each new generator instance (e.g., per function)
             symbol_table: HashMap::new(),
             compiled_functions: HashMap::new(),
+            main_proc_chunk: None,
             known_builtins: HashSet::new(),
             pragma_handlers: Self::register_pragma_handlers(),
+            identified_constants: Vec::new(),
         }
     }
 
@@ -85,13 +91,14 @@ impl CodeGenerator {
             AstNode::Literal(lit) => { // Literals are initially clear
                 let vr = self.allocate_virtual_register(false); // Literals are clear
                 let constant = match lit {
-                    crate::ast::Value::Int(i) => Constant::Int(*i),
+                    crate::ast::Value::Int(i) => Constant::I64(*i),
                     crate::ast::Value::Float(f) => Constant::Float(*f as i64),
                     crate::ast::Value::String(s) => Constant::String(s.clone()),
                     crate::ast::Value::Bool(b) => Constant::Bool(*b),
                     crate::ast::Value::Nil => Constant::Unit,
                 };
-                // Convert Constant to Value
+                // Record constant and convert to Value
+                self.identified_constants.push(constant.clone());
                 let value = crate::core_types::Value::from(constant);
                 self.emit(Instruction::LDI(vr.0, value));
                 Ok((vr, false)) // Return VR and its secrecy (false)
@@ -132,7 +139,8 @@ impl CodeGenerator {
                     }
                     None => { // No initial value, load default (Nil for now)
                         let vr = self.allocate_virtual_register(needs_secret);
-                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit)); // Load Unit
+                        self.identified_constants.push(Constant::Unit);
+                                                self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit)); // Load Unit
                         (vr, needs_secret)
                     }
                 };
@@ -207,11 +215,13 @@ impl CodeGenerator {
                                 self.emit(jump_instruction);
 
                                 // If condition is false
+                                self.identified_constants.push(Constant::Bool(false));
                                 self.emit(Instruction::LDI(bool_dest_vr.0, crate::core_types::Value::Bool(false)));
                                 self.emit(Instruction::JMP(end_label.clone()));
 
                                 // Define the true label's position
                                 self.add_label(true_label);
+                                self.identified_constants.push(Constant::Bool(true));
                                 self.emit(Instruction::LDI(bool_dest_vr.0, crate::core_types::Value::Bool(true)));
 
                                 // Define the end label's position
@@ -230,11 +240,13 @@ impl CodeGenerator {
                                 self.emit(jump_instruction);
 
                                 // If condition is true (jump not taken)
+                                self.identified_constants.push(Constant::Bool(true));
                                 self.emit(Instruction::LDI(bool_dest_vr.0, crate::core_types::Value::Bool(true)));
                                 self.emit(Instruction::JMP(end_label.clone()));
 
                                 // Define the false label's position
                                 self.add_label(false_label);
+                                self.identified_constants.push(Constant::Bool(false));
                                 self.emit(Instruction::LDI(bool_dest_vr.0, crate::core_types::Value::Bool(false)));
 
                                 // Define the end label's position
@@ -288,21 +300,20 @@ impl CodeGenerator {
                         "Codegen expected identifier for function call after semantic analysis".to_string())),
                 };
 
-                // 3. Compile arguments
+                // 3. Compile arguments first (do NOT emit PUSHARG yet) to keep PUSHARGs contiguous before CALL
                 let mut arg_vrs = Vec::with_capacity(arguments.len());
                 for arg in arguments {
-                    let (arg_vr, arg_is_secret) = self.compile_node(arg)?;
-                    self.emit(Instruction::PUSHARG(arg_vr.0));
+                    let (arg_vr, _arg_is_secret) = self.compile_node(arg)?;
                     arg_vrs.push(arg_vr);
+                }
+                // After all arguments are compiled, emit contiguous PUSHARGs in order
+                for vr in &arg_vrs {
+                    self.emit(Instruction::PUSHARG(vr.0));
                 }
 
                 // 4. Determine result type and secrecy from resolved type (added by semantic analysis)
                 let return_type = resolved_return_type.as_ref().cloned()
-                    .unwrap_or_else(|| {
-                        // Should not happen if semantic analysis ran correctly
-                        eprintln!("Warning: Function call node missing resolved return type during codegen for '{}'", function_name);
-                        SymbolType::Unknown
-                    });
+                    .unwrap_or(SymbolType::Unknown);
 
                 let result_is_secret = return_type.is_secret();
                 let result_vr = self.allocate_virtual_register(result_is_secret);
@@ -324,45 +335,48 @@ impl CodeGenerator {
                 // Compare the boolean condition VR against Bool(false)
                 // Note: Condition itself is already boolean, but CMP sets flags for jumps.
                 let false_vr = self.allocate_virtual_register(false); // false is clear
+                self.identified_constants.push(Constant::Bool(false));
                 self.emit(Instruction::LDI(false_vr.0, crate::core_types::Value::Bool(false)));
                 self.emit(Instruction::CMP(condition_vr.0, false_vr.0)); // Compare condition == false
 
                 let else_label = format!("else_{}", self.current_instructions.len());
                 let end_label = format!("end_if_{}", self.current_instructions.len());
 
+                // Jump to else when condition == false
                 self.emit(Instruction::JMPEQ(else_label.clone()));
-                // condition_vr and false_vr are used up to this point.
 
-                // Compile then branch
+                // --- Then Branch ---
                 let (then_vr, then_is_secret) = self.compile_node(then_branch)?;
+                // Provisional result register uses then-branch secrecy; may be updated after else
+                let mut result_is_secret = then_is_secret;
+                let result_vr = self.allocate_virtual_register(result_is_secret);
+                self.emit(Instruction::MOV(result_vr.0, then_vr.0));
+                // Skip else branch after executing then branch
+                self.emit(Instruction::JMP(end_label.clone()));
 
-                // Compile else branch (or load nil)
+                // --- Else Branch ---
+                self.add_label(else_label);
                 let (else_vr, else_is_secret) = match else_branch.as_deref() {
                     Some(branch) => self.compile_node(branch)?,
                     None => {
-                        // If no else, result type depends only on then branch.
-                        let vr = self.allocate_virtual_register(then_is_secret);
+                        // If no else, evaluate to Unit (clear)
+                        let vr = self.allocate_virtual_register(false);
+                        self.identified_constants.push(Constant::Unit);
                         self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
-                        (vr, then_is_secret)
+                        (vr, false)
                     }
                 };
+                // Update secrecy if needed (result is secret if either branch is secret)
+                let final_result_is_secret = result_is_secret || else_is_secret;
+                if final_result_is_secret != result_is_secret {
+                    // Update secrecy map so allocator places this VR into correct bank
+                    self.vr_secrecy.insert(result_vr, final_result_is_secret);
+                }
+                self.emit(Instruction::MOV(result_vr.0, else_vr.0));
 
-                // Result secrecy is secret if EITHER branch is secret
-                let result_is_secret = then_is_secret || else_is_secret;
-                let result_vr = self.allocate_virtual_register(result_is_secret);
-
-                // --- Then Branch Logic ---
-                self.emit(Instruction::MOV(result_vr.0, then_vr.0)); // Move result from then branch
-                self.emit(Instruction::JMP(end_label.clone()));
-
-                // Define the else label's position
-                self.add_label(else_label);
-                // --- Else Branch Logic ---
-                self.emit(Instruction::MOV(result_vr.0, else_vr.0)); // Move result from else branch
-
-                // Define the end label's position
+                // --- End Label ---
                 self.add_label(end_label);
-                Ok((result_vr, result_is_secret)) // Return the VR holding the result
+                Ok((result_vr, final_result_is_secret))
             },
             AstNode::Block(nodes) => {
                 let mut last_vr = self.allocate_virtual_register(false); // Default VR for empty block (clear)
@@ -379,14 +393,13 @@ impl CodeGenerator {
                     None => {
                         // Return Unit (assume clear default)
                         let vr = self.allocate_virtual_register(false);
+                        self.identified_constants.push(Constant::Unit);
                         self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
                         (vr, false)
                     }
                 };
-                // Move the return value into the conventional return register (physical r0)
-                self.emit(Instruction::MOV(0, value_vr.0));
-                self.emit(Instruction::RET(0)); // Use RET 0 convention
-                // value_vr is used by RET.
+                // Return the value directly from its virtual register; the VM will place it in caller's R0.
+                self.emit(Instruction::RET(value_vr.0));
                 Ok((value_vr, value_is_secret)) // Return VR, though RET is terminal
             },
             AstNode::DiscardStatement { expression, location } => {
@@ -417,6 +430,7 @@ impl CodeGenerator {
 
                 // Compare the boolean condition VR against Bool(false)
                 let false_vr = self.allocate_virtual_register(false); // false is clear
+                self.identified_constants.push(Constant::Bool(false));
                 self.emit(Instruction::LDI(false_vr.0, crate::core_types::Value::Bool(false)));
                 self.emit(Instruction::CMP(condition_vr.0, false_vr.0)); // Compare condition == false
 
@@ -434,6 +448,78 @@ impl CodeGenerator {
 
                 // While loops evaluate to Unit
                 let nil_vr = self.allocate_virtual_register(false); // Unit is clear
+                self.identified_constants.push(Constant::Unit);
+                self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Unit));
+                Ok((nil_vr, false))
+            },
+            AstNode::ForLoop { variables, iterable, body, location } => {
+                // Support: single var over range a .. b (inclusive), clear values only.
+                if variables.len() != 1 {
+                    return Err(CompilerError::semantic_error("For-loop with multiple variables not supported yet", location.clone()));
+                }
+                // Expect iterable to be a range binary operation
+                let (start_expr, end_expr) = match iterable.as_ref() {
+                    AstNode::BinaryOperation { op, left, right, location: _ } if op == ".." => (left, right),
+                    _ => {
+                        return Err(CompilerError::semantic_error("Unsupported for-loop iterable; expected 'a .. b' range", iterable.location()));
+                    }
+                };
+
+                // Compile start and end expressions
+                let (start_vr, start_is_secret) = self.compile_node(start_expr)?;
+                let (end_vr, end_is_secret) = self.compile_node(end_expr)?;
+                if start_is_secret || end_is_secret {
+                    return Err(CompilerError::semantic_error("Secret values are not supported in for-loop range bounds", iterable.location()));
+                }
+
+                // Allocate loop variable (clear) and initialize with start
+                let loop_vr = self.allocate_virtual_register(false);
+                self.emit(Instruction::MOV(loop_vr.0, start_vr.0));
+
+                // Insert loop variable into symbol table, saving any previous binding
+                let var_name = variables[0].clone();
+                let prev_binding = self.symbol_table.insert(var_name.clone(), loop_vr.0);
+
+                // Labels
+                let loop_start_label = format!("for_start_{}", self.current_instructions.len());
+                let loop_end_label = format!("for_end_{}", self.current_instructions.len());
+
+                // Start label
+                self.add_label(loop_start_label.clone());
+
+                // If i > end: exit
+                self.emit(Instruction::CMP(loop_vr.0, end_vr.0));
+                self.emit(Instruction::JMPGT(loop_end_label.clone()));
+
+                // Body
+                let (_body_vr, _body_is_secret) = self.compile_node(body)?;
+
+                // i = i + 1
+                let one_vr = self.allocate_virtual_register(false);
+                let one_val = crate::core_types::Value::from(Constant::I64(1));
+                self.identified_constants.push(Constant::I64(1));
+                self.emit(Instruction::LDI(one_vr.0, one_val));
+                self.emit(Instruction::ADD(loop_vr.0, loop_vr.0, one_vr.0));
+
+                // Keep the upper bound (end_vr) live across the body to avoid clobbering by temps
+                let end_keepalive = self.allocate_virtual_register(false);
+                self.emit(Instruction::MOV(end_keepalive.0, end_vr.0));
+
+                // Jump back
+                self.emit(Instruction::JMP(loop_start_label));
+
+                // End label
+                self.add_label(loop_end_label);
+
+                // Restore/cleanup symbol table mapping
+                match prev_binding {
+                    Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
+                    None => { self.symbol_table.remove(&variables[0]); }
+                }
+
+                // For-loops evaluate to Unit
+                let nil_vr = self.allocate_virtual_register(false);
+                self.identified_constants.push(Constant::Unit);
                 self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Unit));
                 Ok((nil_vr, false))
             },
@@ -465,6 +551,7 @@ impl CodeGenerator {
                 let mut function_generator = CodeGenerator::new();
 
                 // --- Add parameters to the function_generator's symbol table ---
+                let mut param_vrs: Vec<VirtualRegister> = Vec::new();
                 for (i, param) in parameters.iter().enumerate() {
                     // Determine parameter secrecy from its type annotation
                     let param_type = param.type_annotation.as_ref()
@@ -474,6 +561,7 @@ impl CodeGenerator {
                     // Allocate a virtual register for the parameter. These will typically
                     let param_vr = function_generator.allocate_virtual_register(param_is_secret);
                     function_generator.symbol_table.insert(param.name.clone(), param_vr.0); // Store VR index
+                    param_vrs.push(param_vr);
                 }
 
                 // Compile the function body using the new generator.
@@ -481,14 +569,20 @@ impl CodeGenerator {
 
                 // --- Perform Register Allocation ---
                 let virtual_instructions = function_generator.current_instructions;
-                let intervals = register_allocator::analyze_liveness(&virtual_instructions);
+                let intervals = register_allocator::analyze_liveness_cfg_with_liveins(&virtual_instructions, &function_generator.current_labels, &param_vrs);
                 let graph = register_allocator::build_interference_graph(&intervals);
 
                 let k_clear = SECRET_REGISTER_START;
                 let k_secret = MAX_REGISTERS - k_clear;
                 let secrecy_map = function_generator.vr_secrecy;
 
-                let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map);
+                // Precolor parameter VRs to ABI registers R0..Rn-1
+                let mut precolored: HashMap<VirtualRegister, PhysicalRegister> = HashMap::new();
+                for (i, vr) in param_vrs.iter().enumerate() {
+                    precolored.insert(*vr, PhysicalRegister(i));
+                }
+
+                let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map, &precolored);
                 let allocation = match allocation_result {
                     Ok(alloc) => alloc,
                     Err(AllocationError::NeedsSpilling(spilled_vrs)) => {
@@ -502,20 +596,32 @@ impl CodeGenerator {
                 };
 
                 // Rewrite instructions with physical registers
-                let final_instructions = register_allocator::rewrite_instructions(&virtual_instructions, &allocation, k_clear);
+                let final_instructions = register_allocator::rewrite_instructions(&virtual_instructions, &allocation);
 
                 // Finalize the function's bytecode chunk.
                 let mut function_chunk = BytecodeChunk::new();
                 function_chunk.instructions = final_instructions;
                 function_chunk.labels = function_generator.current_labels; // TODO: Adjust label indices after rewrite/spilling?
+                function_chunk.constants = dedupe_constants(function_generator.identified_constants);
 
-                // Store the compiled chunk in the main generator's map.
+                // Store the compiled chunk appropriately.
                 if let Some(func_name) = name {
-                    if self.compiled_functions.contains_key(func_name) {
-                        // TODO: Allow overloading later?
-                        return Err(CompilerError::semantic_error(format!("Function '{}' already defined", func_name), location.clone()));
+                    if func_name == "main" && return_type.is_none() {
+                        // Treat 'proc main()' as the program's main chunk.
+                        if self.main_proc_chunk.is_some() {
+                            return Err(CompilerError::semantic_error(
+                                "Multiple 'main' procedures defined".to_string(),
+                                location.clone()
+                            ));
+                        }
+                        self.main_proc_chunk = Some(function_chunk);
+                    } else {
+                        if self.compiled_functions.contains_key(func_name) {
+                            // TODO: Allow overloading later?
+                            return Err(CompilerError::semantic_error(format!("Function '{}' already defined", func_name), location.clone()));
+                        }
+                        self.compiled_functions.insert(func_name.clone(), function_chunk);
                     }
-                    self.compiled_functions.insert(func_name.clone(), function_chunk);
                 } else {
                     // TODO: Handle anonymous functions (lambdas)
                     return Err(CompilerError::internal_error("Anonymous function definition not yet supported".to_string()));
@@ -530,16 +636,35 @@ impl CodeGenerator {
 
     /// Finalizes the entire compiled program, including the main chunk and all function chunks.
     fn finalize_program(mut self) -> CompilerResult<CompiledProgram> {
-        // Add a default RET instruction at the end of the main chunk if needed.
+        // If a 'proc main()' was compiled, prefer it as main only when there are no top-level instructions.
+        if let Some(main_proc) = self.main_proc_chunk.take() {
+            if self.current_instructions.is_empty() {
+                return Ok(CompiledProgram {
+                    main_chunk: main_proc,
+                    function_chunks: self.compiled_functions,
+                });
+            } else {
+                // Preserve the compiled main proc as a normal function.
+                self.compiled_functions.insert("main".to_string(), main_proc);
+            }
+        }
+
+        // If there are no top-level instructions but a 'main' function exists,
+        // insert a call to 'main' so the program entry has executable bytecode.
+        if self.current_instructions.is_empty() && self.compiled_functions.contains_key("main") {
+            self.current_instructions.push(Instruction::CALL("main".to_string()));
+        }
         // Perform register allocation for the main chunk's instructions
         let main_instructions = self.current_instructions; // Instructions generated for the main body
-        let intervals = register_allocator::analyze_liveness(&main_instructions);
+        let intervals = register_allocator::analyze_liveness_cfg_with_liveins(&main_instructions, &self.current_labels, &[]);
         let graph = register_allocator::build_interference_graph(&intervals);
 
         let k_clear = SECRET_REGISTER_START;
         let k_secret = MAX_REGISTERS - k_clear;
         let secrecy_map = self.vr_secrecy;
-        let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map);
+        // No precolored mapping for top-level/main chunk
+        let empty_pre: HashMap<VirtualRegister, PhysicalRegister> = HashMap::new();
+        let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map, &empty_pre);
         let allocation = match allocation_result {
             Ok(alloc) => alloc,
             Err(AllocationError::NeedsSpilling(spilled_vrs)) => {
@@ -552,10 +677,11 @@ impl CodeGenerator {
             Err(AllocationError::PoolExhausted(_, _)) => return Err(CompilerError::internal_error("Register allocation failed: Pool exhausted".to_string())),
         };
 
-        let final_main_instructions = register_allocator::rewrite_instructions(&main_instructions, &allocation, k_clear);
+        let final_main_instructions = register_allocator::rewrite_instructions(&main_instructions, &allocation);
         let mut main_chunk = BytecodeChunk::new();
         main_chunk.instructions = final_main_instructions;
         main_chunk.labels = self.current_labels; // TODO: Adjust label indices?
+        main_chunk.constants = dedupe_constants(self.identified_constants);
 
         Ok(CompiledProgram {
             main_chunk,
@@ -577,8 +703,50 @@ fn handle_builtin_pragma(
     Ok(())
 }
 
+fn dedupe_constants(constants: Vec<Constant>) -> Vec<Constant> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<crate::core_types::Value> = HashSet::new();
+    let mut out = Vec::with_capacity(constants.len());
+    for c in constants.into_iter() {
+        let v = crate::core_types::Value::from(c.clone());
+        if seen.insert(v) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub fn generate_bytecode(node: &AstNode) -> CompilerResult<CompiledProgram> {
     let mut generator = CodeGenerator::new();
     let (_result_vr, _result_is_secret) = generator.compile_node(node)?;
     generator.finalize_program()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dedupe_constants, Constant};
+
+    #[test]
+    fn dedupe_removes_duplicates_and_preserves_order() {
+        let input = vec![
+            Constant::I64(1),
+            Constant::Bool(true),
+            Constant::I64(1),           // dup
+            Constant::String("a".into()),
+            Constant::String("a".into()), // dup
+            Constant::Unit,
+            Constant::Unit,               // dup
+            Constant::Bool(true),         // dup
+            Constant::I64(2),
+        ];
+
+        let out = dedupe_constants(input);
+
+        assert_eq!(out.len(), 5, "Expected 5 unique constants");
+        assert!(matches!(out[0], Constant::I64(1)));
+        assert!(matches!(out[1], Constant::Bool(true)));
+        assert!(matches!(out[2], Constant::String(ref s) if s == "a"));
+        assert!(matches!(out[3], Constant::Unit));
+        assert!(matches!(out[4], Constant::I64(2)));
+    }
 }

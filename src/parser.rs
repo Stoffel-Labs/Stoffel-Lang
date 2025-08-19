@@ -359,13 +359,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_for_loop(&mut self) -> CompilerResult<AstNode> {
-         let location = self.get_location();
-         Err(CompilerError::syntax_error("For loop parsing not implemented", location))
-         // Example structure: for var1, var2 in iterable: block
-         // Need to parse one or more identifiers before 'in'
-         // Parse iterable expression
-         // Parse block
-         // Construct AstNode::ForLoop
+        let start_location = self.get_location(); // Location of 'for'
+        self.consume_keyword("for", "Expected 'for'")?;
+
+        // Parse one or more identifiers separated by commas
+        let mut variables = Vec::new();
+        let first_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected loop variable name")?;
+        let first_name = match &first_ident.kind {
+            TokenKind::Identifier(n) => n.clone(),
+            _ => unreachable!(),
+        };
+        variables.push(first_name);
+        while self.check(&TokenKind::Comma) {
+            self.advance(); // consume ','
+            let ident_tok = self.consume(&TokenKind::Identifier("".to_string()), "Expected loop variable name after ','")?;
+            if let TokenKind::Identifier(n) = &ident_tok.kind {
+                variables.push(n.clone());
+            }
+        }
+
+        // Expect 'in'
+        // 'in' is tokenized as a keyword in our lexer
+        self.consume_keyword("in", "Expected 'in' in for-loop header")?;
+
+        // Parse iterable expression
+        let iterable = self.parse_expression()?;
+
+        // Expect ':' then a block
+        self.consume(&TokenKind::Colon, "Expected ':' after for-loop header")?;
+        let body = self.parse_indented_block()?;
+
+        Ok(AstNode::ForLoop {
+            variables,
+            iterable: Box::new(iterable),
+            body: Box::new(body),
+            location: start_location,
+        })
     }
 
     fn parse_return_statement(&mut self) -> CompilerResult<AstNode> {
@@ -404,8 +433,9 @@ impl<'a> Parser<'a> {
                 "or" => 1,
                 "and" => 2,
                 "==" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "in" => 3, // Comparison operators
-                "+" | "-" => 4, // Addition/Subtraction
-                "*" | "/" | "%" => 5, // Multiplication/Division/Modulo
+                ".." => 4, // Range operator
+                "+" | "-" => 5, // Addition/Subtraction
+                "*" | "/" | "%" => 6, // Multiplication/Division/Modulo
                 // Add other operators like power (**), bitwise (&, |, ^), etc.
                 _ => 0, // Not an infix operator or lowest precedence
             },
