@@ -127,6 +127,15 @@ fn convert_chunk_to_function(
     for constant in &chunk.constants {
         add_constant_to_binary(binary, constant, constant_map);
     }
+
+    // Preload all immediate values used by LDI into the constant pool to ensure
+    // instructions reference pre-existing pool entries (especially important for strings)
+    for instruction in &chunk.instructions {
+        if let Instruction::LDI(_reg, value) = instruction {
+            // Insert the value into the constant pool/map if not present yet
+            let _ = get_or_add_constant(binary, &value.clone(), constant_map);
+        }
+    }
     
     // Convert instructions
     let mut instructions = Vec::new();
@@ -136,8 +145,8 @@ fn convert_chunk_to_function(
                 CompiledInstruction::LD(*reg, *offset),
                 
             Instruction::LDI(reg, value) => {
-                let value_from_constant = Value::from(value.clone());
-                let const_idx = get_or_add_constant(binary, &value_from_constant, constant_map);
+                // Use the value as-is; it may already be an interned string or reference to constant table
+                let const_idx = get_or_add_constant(binary, &value.clone(), constant_map);
                 CompiledInstruction::LDI(*reg, const_idx)
             },
             
@@ -215,9 +224,10 @@ fn convert_chunk_to_function(
     }
     
     // Create the compiled function
+    let reg_count = estimate_register_count(chunk);
     CompiledFunction {
         name: name.to_string(),
-        register_count: estimate_register_count(chunk),
+        register_count: reg_count,
         parameters,
         upvalues: Vec::new(), // We'll need to extract these from the AST or symbol table
         parent,
@@ -292,20 +302,36 @@ fn get_or_add_constant(
 ///
 /// The estimated number of registers used by the function
 fn estimate_register_count(chunk: &BytecodeChunk) -> usize {
-    let mut max_reg = 0;
-    
+    // Determine separate usage of clear vs secret physical registers and return their sum.
+    // Convention: clear registers are in the low bank [0, SECRET_REGISTER_START),
+    // secret registers are in [SECRET_REGISTER_START, MAX_REGISTERS).
+    const MAX_REGISTERS: usize = 64; // Must stay consistent with codegen/register allocator
+    const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
+
+    let mut max_clear: Option<usize> = None; // absolute index within clear bank
+    let mut max_secret_abs: Option<usize> = None; // absolute index within full space
+
+    let mut consider_reg = |r: usize| {
+        if r >= SECRET_REGISTER_START {
+            max_secret_abs = Some(max_secret_abs.map_or(r, |m| m.max(r)));
+        } else {
+            max_clear = Some(max_clear.map_or(r, |m| m.max(r)));
+        }
+    };
+
     for instruction in &chunk.instructions {
         match instruction {
             Instruction::LD(reg, _) |
             Instruction::LDI(reg, _) |
             Instruction::RET(reg) |
             Instruction::PUSHARG(reg) => {
-                max_reg = max_reg.max(*reg);
+                consider_reg(*reg);
             },
             Instruction::MOV(dest, src) |
             Instruction::NOT(dest, src) |
             Instruction::CMP(dest, src) => {
-                max_reg = max_reg.max(*dest).max(*src);
+                consider_reg(*dest);
+                consider_reg(*src);
             },
             Instruction::ADD(dest, src1, src2) |
             Instruction::SUB(dest, src1, src2) |
@@ -317,14 +343,18 @@ fn estimate_register_count(chunk: &BytecodeChunk) -> usize {
             Instruction::XOR(dest, src1, src2) |
             Instruction::SHL(dest, src1, src2) |
             Instruction::SHR(dest, src1, src2) => {
-                max_reg = max_reg.max(*dest).max(*src1).max(*src2);
+                consider_reg(*dest);
+                consider_reg(*src1);
+                consider_reg(*src2);
             },
             _ => {},
         }
     }
-    
-    // Add 1 because registers are 0-indexed
-    max_reg + 1
+
+    let clear_count = max_clear.map_or(0, |m| m + 1);
+    let secret_count = max_secret_abs.map_or(0, |m| (m - SECRET_REGISTER_START) + 1);
+
+    clear_count + secret_count
 }
 
 /// Saves a `CompiledBinary` to a file
@@ -377,4 +407,274 @@ fn infer_function_arities(program: &CompiledProgram) -> HashMap<String, usize> {
         scan_chunk(&mut map, chunk);
     }
     map
+}
+
+
+/// Loads a `CompiledBinary` from a file path
+pub fn load_from_file<P: AsRef<Path>>(path: P) -> BinaryResult<CompiledBinary> {
+    stoffel_vm_types::compiled_binary::utils::load_from_file(path)
+}
+
+/// Produces a human-readable disassembly of a `CompiledBinary`
+pub fn disassemble(binary: &CompiledBinary) -> String {
+    use std::fmt::Write as _;
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Ty {
+        I64, I32, I16, I8, U64, U32, U16, U8, Float, Bool, String, Object, Array, Foreign, Closure, Unit, Share, Number, Unknown,
+    }
+    impl Ty {
+        fn from_value(v: &Value) -> Ty {
+            match v {
+                Value::I64(_) => Ty::I64,
+                Value::I32(_) => Ty::I32,
+                Value::I16(_) => Ty::I16,
+                Value::I8(_) => Ty::I8,
+                Value::U64(_) => Ty::U64,
+                Value::U32(_) => Ty::U32,
+                Value::U16(_) => Ty::U16,
+                Value::U8(_) => Ty::U8,
+                Value::Float(_) => Ty::Float,
+                Value::Bool(_) => Ty::Bool,
+                Value::String(_) => Ty::String,
+                Value::Object(_) => Ty::Object,
+                Value::Array(_) => Ty::Array,
+                Value::Foreign(_) => Ty::Foreign,
+                Value::Closure(_) => Ty::Closure,
+                Value::Unit => Ty::Unit,
+                Value::Share(_, _) => Ty::Share,
+            }
+        }
+        fn is_integer(&self) -> bool {
+            matches!(self, Ty::I64|Ty::I32|Ty::I16|Ty::I8|Ty::U64|Ty::U32|Ty::U16|Ty::U8)
+        }
+        fn is_numeric(&self) -> bool { self.is_integer() || matches!(self, Ty::Float) }
+    }
+    impl std::fmt::Display for Ty {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let s = match self {
+                Ty::I64=>"i64", Ty::I32=>"i32", Ty::I16=>"i16", Ty::I8=>"i8",
+                Ty::U64=>"u64", Ty::U32=>"u32", Ty::U16=>"u16", Ty::U8=>"u8",
+                Ty::Float=>"float", Ty::Bool=>"bool", Ty::String=>"string",
+                Ty::Object=>"object", Ty::Array=>"array", Ty::Foreign=>"foreign",
+                Ty::Closure=>"closure", Ty::Unit=>"unit", Ty::Share=>"secret",
+                Ty::Number=>"number", Ty::Unknown=>"unknown",
+            }; write!(f, "{}", s)
+        }
+    }
+    fn unify(a: &Ty, b: &Ty) -> Ty {
+        use Ty::*;
+        match (a,b) {
+            // Secret dominates: any mix with secret stays secret
+            (Share, _) | (_, Share) => Share,
+            (Unknown, t) | (t, Unknown) => t.clone(),
+            (Unit, Unit) => Unit,
+            (Bool, Bool) => Bool,
+            // numeric
+            (Float, t) | (t, Float) if matches!(t, Float|I64|I32|I16|I8|U64|U32|U16|U8) => Float,
+            (x, y) if x.is_integer() && y.is_integer() => Number,
+            (String, String) => String,
+            (Object, Object) => Object,
+            (Array, Array) => Array,
+            (Foreign, Foreign) => Foreign,
+            (Closure, Closure) => Closure,
+            _ => Unknown,
+        }
+    }
+
+    let mut out = String::new();
+    let _ = writeln!(out, "; Stoffel Disassembly");
+    let _ = writeln!(out, "; Format version: {}", binary.version);
+    let _ = writeln!(out);
+
+    // Constants
+    let _ = writeln!(out, ".constants ({} entries):", binary.constants.len());
+    for (i, c) in binary.constants.iter().enumerate() {
+        let _ = writeln!(out, "  {:04}: {:?}", i, c);
+    }
+    let _ = writeln!(out);
+
+    // Pre-infer function signatures (param types) by scanning call sites
+    use std::collections::HashMap;
+    let mut sig_map: HashMap<String, Vec<Ty>> = HashMap::new();
+
+    // We need per-function simple register type propagation to read types at PUSHARG
+    fn infer_reg_types(func: &CompiledFunction, constants: &Vec<Value>) -> Vec<Ty> {
+        // Size the register type vector by the absolute max register index used, not by func.register_count,
+        // because register_count is (clear_used + secret_used), while physical indices are absolute.
+        const MAX_REGISTERS: usize = 64;
+        const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
+
+        let mut max_abs: usize = 0;
+        for instr in &func.instructions {
+            match instr {
+                CompiledInstruction::LD(r, _) | CompiledInstruction::LDI(r, _) | CompiledInstruction::RET(r) | CompiledInstruction::PUSHARG(r) => { max_abs = max_abs.max(*r); }
+                CompiledInstruction::MOV(d,s) | CompiledInstruction::NOT(d,s) | CompiledInstruction::CMP(d,s) => { max_abs = max_abs.max(*d).max(*s); }
+                CompiledInstruction::ADD(d,a,b)
+                | CompiledInstruction::SUB(d,a,b)
+                | CompiledInstruction::MUL(d,a,b)
+                | CompiledInstruction::DIV(d,a,b)
+                | CompiledInstruction::MOD(d,a,b)
+                | CompiledInstruction::AND(d,a,b)
+                | CompiledInstruction::OR(d,a,b)
+                | CompiledInstruction::XOR(d,a,b)
+                | CompiledInstruction::SHL(d,a,b)
+                | CompiledInstruction::SHR(d,a,b) => { max_abs = max_abs.max(*d).max(*a).max(*b); }
+                _ => {}
+            }
+        }
+        let mut regs = vec![Ty::Unknown; (max_abs + 1).max(1)];
+        let is_secret_reg = |r: usize| r >= SECRET_REGISTER_START;
+        // Initialize secrecy for secret bank registers so reads reflect secrecy even before writes
+        for r in SECRET_REGISTER_START..=max_abs { regs[r] = Ty::Share; }
+
+        for instr in &func.instructions {
+            match instr {
+                CompiledInstruction::LDI(r, const_idx) => {
+                    if is_secret_reg(*r) {
+                        regs[*r] = Ty::Share;
+                    } else if let Some(v) = constants.get(*const_idx) {
+                        regs[*r] = Ty::from_value(v);
+                    }
+                }
+                CompiledInstruction::MOV(d,s) => {
+                    let mut t = regs.get(*s).cloned().unwrap_or(Ty::Unknown);
+                    if is_secret_reg(*d) { t = Ty::Share; }
+                    regs[*d] = t;
+                }
+                CompiledInstruction::ADD(d,a,b)
+                | CompiledInstruction::SUB(d,a,b)
+                | CompiledInstruction::MUL(d,a,b)
+                | CompiledInstruction::DIV(d,a,b)
+                | CompiledInstruction::MOD(d,a,b)
+                | CompiledInstruction::AND(d,a,b)
+                | CompiledInstruction::OR(d,a,b)
+                | CompiledInstruction::XOR(d,a,b)
+                | CompiledInstruction::SHL(d,a,b)
+                | CompiledInstruction::SHR(d,a,b) => {
+                    let t1 = regs.get(*a).cloned().unwrap_or(Ty::Unknown);
+                    let t2 = regs.get(*b).cloned().unwrap_or(Ty::Unknown);
+                    let mut t = unify(&t1, &t2);
+                    if is_secret_reg(*d) { t = Ty::Share; }
+                    regs[*d] = t;
+                }
+                CompiledInstruction::NOT(d,s) => {
+                    let mut t = regs.get(*s).cloned().unwrap_or(Ty::Unknown);
+                    t = if t == Ty::Bool { Ty::Bool } else { t };
+                    if is_secret_reg(*d) { t = Ty::Share; }
+                    regs[*d] = t;
+                }
+                CompiledInstruction::LD(_, _) | CompiledInstruction::JMP(_)
+                | CompiledInstruction::JMPEQ(_) | CompiledInstruction::JMPNEQ(_)
+                | CompiledInstruction::JMPLT(_) | CompiledInstruction::JMPGT(_)
+                | CompiledInstruction::CALL(_) | CompiledInstruction::RET(_)
+                | CompiledInstruction::PUSHARG(_) | CompiledInstruction::CMP(_, _) => {}
+            }
+        }
+        regs
+    }
+
+    // Build signatures
+    for func in &binary.functions {
+        let regs = infer_reg_types(func, &binary.constants);
+        let instrs = &func.instructions;
+        let mut i = 0usize;
+        while i < instrs.len() {
+            if let CompiledInstruction::CALL(name) = &instrs[i] {
+                // count contiguous PUSHARGs before this
+                let mut args = Vec::new();
+                let mut j = i as isize - 1;
+                while j >= 0 {
+                    match &instrs[j as usize] {
+                        CompiledInstruction::PUSHARG(r) => { args.push(*r); j -= 1; }
+                        _ => break,
+                    }
+                }
+                args.reverse();
+                let entry = sig_map.entry(name.clone()).or_insert_with(|| vec![Ty::Unknown; args.len()]);
+                if entry.len() < args.len() { entry.resize(args.len(), Ty::Unknown); }
+                for (idx, reg) in args.into_iter().enumerate() {
+                    let t = regs.get(reg).cloned().unwrap_or(Ty::Unknown);
+                    entry[idx] = unify(&entry[idx], &t);
+                }
+            }
+            i += 1;
+        }
+    }
+
+    // Also infer return types per function
+    let mut ret_map: HashMap<String, Ty> = HashMap::new();
+    for func in &binary.functions {
+        let regs = infer_reg_types(func, &binary.constants);
+        let mut ret_ty = Ty::Unknown;
+        for instr in &func.instructions {
+            if let CompiledInstruction::RET(r) = instr {
+                let t = regs.get(*r).cloned().unwrap_or(Ty::Unknown);
+                ret_ty = unify(&ret_ty, &t);
+            }
+        }
+        ret_map.insert(func.name.clone(), ret_ty);
+    }
+
+    // Functions
+    let mut functions = binary.functions.clone();
+    functions.sort_by(|a, b| a.name.cmp(&b.name));
+    for func in functions.iter() {
+        let _ = writeln!(out, ".function {}", func.name);
+        if let Some(parent) = &func.parent {
+            let _ = writeln!(out, "  ; parent: {}", parent);
+        }
+        if !func.parameters.is_empty() {
+            let _ = writeln!(out, "  ; params ({}): {}", func.parameters.len(), func.parameters.join(", "));
+        }
+        // If we inferred a signature, print parameter types
+        if let Some(sig) = sig_map.get(&func.name) {
+            if !sig.is_empty() {
+                let sig_s = sig.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                let _ = writeln!(out, "  ; inferred param types: ({})", sig_s);
+            }
+        }
+        if let Some(rty) = ret_map.get(&func.name) {
+            let _ = writeln!(out, "  ; inferred return: {}", rty);
+        }
+        // Compute clear/secret register usage for display
+        const MAX_REGISTERS: usize = 64;
+        const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
+        let mut max_clear: Option<usize> = None;
+        let mut max_secret_abs: Option<usize> = None;
+        for instr in &func.instructions {
+            let mut visit = |r: usize| {
+                if r >= SECRET_REGISTER_START { max_secret_abs = Some(max_secret_abs.map_or(r, |m| m.max(r))); }
+                else { max_clear = Some(max_clear.map_or(r, |m| m.max(r))); }
+            };
+            match instr {
+                CompiledInstruction::LD(r, _) | CompiledInstruction::LDI(r, _) | CompiledInstruction::RET(r) | CompiledInstruction::PUSHARG(r) => visit(*r),
+                CompiledInstruction::MOV(d,s) | CompiledInstruction::NOT(d,s) | CompiledInstruction::CMP(d,s) => { visit(*d); visit(*s); }
+                CompiledInstruction::ADD(d,a,b)
+                | CompiledInstruction::SUB(d,a,b)
+                | CompiledInstruction::MUL(d,a,b)
+                | CompiledInstruction::DIV(d,a,b)
+                | CompiledInstruction::MOD(d,a,b)
+                | CompiledInstruction::AND(d,a,b)
+                | CompiledInstruction::OR(d,a,b)
+                | CompiledInstruction::XOR(d,a,b)
+                | CompiledInstruction::SHL(d,a,b)
+                | CompiledInstruction::SHR(d,a,b) => { visit(*d); visit(*a); visit(*b); }
+                _ => {}
+            }
+        }
+        let clear_count = max_clear.map_or(0, |m| m + 1);
+        let secret_count = max_secret_abs.map_or(0, |m| (m - SECRET_REGISTER_START) + 1);
+        let total = clear_count + secret_count;
+        let _ = writeln!(out, "  ; registers: {} (clear {}, secret {})", total, clear_count, secret_count);
+        if !func.labels.is_empty() {
+            let _ = writeln!(out, "  ; labels: {:?}", func.labels);
+        }
+        let _ = writeln!(out, "  ; instructions ({}):", func.instructions.len());
+        for (i, instr) in func.instructions.iter().enumerate() {
+            let _ = writeln!(out, "  {:04}: {:?}", i, instr);
+        }
+        let _ = writeln!(out, ".endfunction\n");
+    }
+
+    out
 }

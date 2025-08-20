@@ -398,6 +398,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_return_statement(&mut self) -> CompilerResult<AstNode> {
+        let start_location = self.get_location();
         self.consume_keyword("return", "Expected 'return'")?;
         let value = if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
             Some(Box::new(self.parse_expression()?))
@@ -405,7 +406,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(AstNode::Return { 0: value })
+        Ok(AstNode::Return { value, location: start_location })
     }
 
     fn parse_discard_statement(&mut self) -> CompilerResult<AstNode> {

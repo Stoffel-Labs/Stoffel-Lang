@@ -386,7 +386,7 @@ impl CodeGenerator {
                 }
                 Ok((last_vr, last_vr_is_secret))
             },
-            AstNode::Return(value) => {
+            AstNode::Return { value, location: _ } => {
                 // Determine secrecy based on function signature's return type (TODO)
                 let (value_vr, value_is_secret) = match value {
                     Some(v) => self.compile_node(v)?,

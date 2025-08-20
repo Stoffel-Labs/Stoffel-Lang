@@ -23,7 +23,7 @@ mod binary_converter;
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct CliArgs {
-    /// The source file to compile
+    /// The source file to compile or the binary to disassemble
     #[arg(required = true)]
     filename: String,
 
@@ -34,6 +34,10 @@ struct CliArgs {
     /// Generate VM-compatible binary
     #[arg(short = 'b', long)]
     binary: bool,
+
+    /// Disassemble a compiled Stoffel binary (.stfl) instead of compiling source
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    disassemble: bool,
 
     /// Print intermediate representations (Tokens, AST)
     #[arg(long)]
@@ -68,6 +72,22 @@ fn main() {
     let args = CliArgs::parse();
 
     let filename = &args.filename;
+
+    // Disassemble mode: read binary and print human-readable disassembly
+    if args.disassemble {
+        match binary_converter::load_from_file(filename) {
+            Ok(bin) => {
+                let text = binary_converter::disassemble(&bin);
+                println!("{}", text);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Error loading binary '{}': {:?}", filename, e);
+                process::exit(1);
+            }
+        }
+    }
+
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
         Err(e) => {

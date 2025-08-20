@@ -250,7 +250,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.populate_symbols(target)?; // Target might be complex (field access)
                 self.populate_symbols(value)?;
             }
-            AstNode::Return(Some(expr)) => self.populate_symbols(expr)?,
+            AstNode::Return { value: Some(expr), .. } => self.populate_symbols(expr)?,
             AstNode::DiscardStatement { expression, .. } => self.populate_symbols(expression)?,
             AstNode::FunctionCall { function, arguments, .. } => {
                 self.populate_symbols(function)?;
@@ -275,7 +275,7 @@ impl<'a> SemanticAnalyzer<'a> {
             // AstNode::Import { .. } => { /* Add imported symbols */ }
 
             // Leaf nodes and expressions that don't declare things
-            AstNode::Literal(_) | AstNode::Identifier(_, _) | AstNode::Return(None) => {}
+            AstNode::Literal(_) | AstNode::Identifier(_, _) | AstNode::Return { value: None, .. } => {}
             // Add other node types as needed
             _ => {
                  // Optionally print a warning for unhandled node types during population
@@ -484,15 +484,79 @@ impl<'a> SemanticAnalyzer<'a> {
             }
 
             // --- Expressions and Control Flow ---
+            AstNode::IfExpression { condition, then_branch, else_branch } => {
+                // Analyze condition and enforce that branching on secret is not supported
+                let (checked_condition, cond_type) = self.analyze_node(*condition)?;
+                if cond_type.is_secret() {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        "Branching with secret values isn't supported yet (secret condition in 'if')",
+                        checked_condition.location(),
+                    ));
+                    return Err(());
+                }
+                // Optional: ensure condition is bool (underlying type)
+                if cond_type.underlying_type() != &SymbolType::Bool {
+                    self.error_reporter.add_error(CompilerError::type_error(
+                        "If-condition must be of type 'bool'",
+                        checked_condition.location(),
+                    ));
+                    return Err(());
+                }
+
+                // Analyze branches
+                let (checked_then, _then_ty) = self.analyze_node(*then_branch)?;
+                let checked_else = if let Some(eb) = else_branch {
+                    let (c_eb, _else_ty) = self.analyze_node(*eb)?;
+                    Some(Box::new(c_eb))
+                } else { None };
+
+                Ok((AstNode::IfExpression {
+                    condition: Box::new(checked_condition),
+                    then_branch: Box::new(checked_then),
+                    else_branch: checked_else,
+                }, SymbolType::Unknown))
+            }
+            AstNode::WhileLoop { condition, body, location } => {
+                // Analyze condition and error if it's secret
+                let (checked_condition, cond_type) = self.analyze_node(*condition)?;
+                if cond_type.is_secret() {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        "Branching with secret values isn't supported yet (secret condition in 'while')",
+                        checked_condition.location(),
+                    ));
+                    return Err(());
+                }
+                if cond_type.underlying_type() != &SymbolType::Bool {
+                    self.error_reporter.add_error(CompilerError::type_error(
+                        "While-condition must be of type 'bool'",
+                        checked_condition.location(),
+                    ));
+                    return Err(());
+                }
+                let (checked_body, _body_ty) = self.analyze_node(*body)?;
+                Ok((AstNode::WhileLoop { condition: Box::new(checked_condition), body: Box::new(checked_body), location }, SymbolType::Void))
+            }
             AstNode::Block(statements) => {
                 // Blocks don't create scopes by default in this design.
                 // Scopes are handled by functions, loops (if needed), etc.
                 let mut checked_statements = Vec::new();
                 let mut last_type = SymbolType::Void; // Default for empty block
+                // Important: continue analyzing all statements even if some have errors
                 for stmt in statements {
-                    let (checked_stmt, stmt_type) = self.analyze_node(stmt)?;
-                    checked_statements.push(checked_stmt);
-                    last_type = stmt_type; // Type of block is type of last expression/statement
+                    match self.analyze_node(stmt) {
+                        Ok((checked_stmt, stmt_type)) => {
+                            last_type = stmt_type; // Type of block is type of last successful statement
+                            checked_statements.push(checked_stmt);
+                        }
+                        Err(()) => {
+                            // Preserve the original statement to keep AST shape and continue
+                            // We purposely do not update last_type here.
+                            // Note: We cannot reconstruct the original `stmt` here because it's moved by match,
+                            // so we push a placeholder no-op statement to maintain block length.
+                            // If a proper NoOp node exists, prefer that; otherwise use an empty literal.
+                            checked_statements.push(AstNode::Literal(Value::Nil));
+                        }
+                    }
                 }
                 Ok((AstNode::Block(checked_statements), last_type))
             }
@@ -547,7 +611,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 }, SymbolType::Void))
             }
 
-            AstNode::Return(ref maybe_expr) => {
+            AstNode::Return { value: ref maybe_expr, location: ref ret_loc } => {
                  let (checked_expr_node, return_value_type) = match maybe_expr {
                      Some(expr) => {
                          let (checked_expr, expr_type) = self.analyze_node(*expr.clone())?;
@@ -574,7 +638,7 @@ impl<'a> SemanticAnalyzer<'a> {
                          return Err(());
                      }
                  }
-                 Ok((AstNode::Return(checked_expr_node), SymbolType::Void)) // Return is a statement
+                 Ok((AstNode::Return { value: checked_expr_node, location: ret_loc.clone() }, SymbolType::Void)) // Return is a statement
              }
 
             AstNode::FunctionCall { function, arguments, location, resolved_return_type: _ } => { // Ignore existing resolved_return_type
@@ -632,7 +696,8 @@ impl<'a> SemanticAnalyzer<'a> {
 
                 // 5. Validate arguments using integer compatibility rules
                 for (idx, (expected_ty, actual_ty)) in expected_param_types.iter().zip(argument_types.iter()).enumerate() {
-                    let arg_loc = checked_arguments[idx].location();
+                    let mut arg_loc = checked_arguments[idx].location();
+                    if arg_loc.line == 0 { arg_loc = location.clone(); }
                     if self.check_integer_compat(Some(&checked_arguments[idx]), actual_ty, expected_ty, arg_loc).is_err() {
                         return Err(());
                     }
