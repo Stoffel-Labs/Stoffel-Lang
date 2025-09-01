@@ -11,7 +11,7 @@ mod tests {
 
     // Helper function to create a literal node
     fn lit_int(value: i64) -> AstNode {
-        AstNode::Literal(Value::Int(value))
+        AstNode::Literal(Value::Int { value: value as u128, kind: None })
     }
 
     #[test]

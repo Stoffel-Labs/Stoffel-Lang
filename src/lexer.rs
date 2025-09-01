@@ -13,7 +13,7 @@ pub enum TokenKind {
     Keyword(String),
     Operator(String),
     // Literals
-    IntLiteral(i64), // Includes different bases later // TODO: need to impl all literals
+    IntLiteral { value: u128, radix: u32, kind: Option<crate::ast::IntKind> }, // includes bases and optional suffix
     FloatLiteral(u64), // this is a fixed point
     StringLiteral(String),
     BoolLiteral(bool),
@@ -292,37 +292,107 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
             // Numbers (Int, Float)
             c if c.is_ascii_digit() => {
                 let start_col = column;
-                let mut num_str = c.to_string();
+                let mut consumed: usize = 1; // we already consumed 'c'
+                let mut radix: u32 = 10;
                 let mut is_float = false;
+                let mut digits = String::new();
+
+                // Detect radix prefixes like 0x, 0b, 0o
+                if c == '0' {
+                    if let Some(&next_c) = iter.peek() {
+                        match next_c {
+                            'x' | 'X' => { iter.next(); consumed += 1; radix = 16; },
+                            'b' | 'B' => { iter.next(); consumed += 1; radix = 2; },
+                            'o' | 'O' => { iter.next(); consumed += 1; radix = 8; },
+                            _ => { digits.push('0'); }
+                        }
+                    } else {
+                        digits.push('0');
+                    }
+                } else {
+                    digits.push(c);
+                }
+
+                // Helper to check valid digit for radix
+                let mut is_valid_digit = |ch: char| -> bool {
+                    match radix {
+                        2 => ch == '0' || ch == '1',
+                        8 => ch.is_ascii_digit() && ch <= '7',
+                        10 => ch.is_ascii_digit(),
+                        16 => ch.is_ascii_digit() || ('a'..='f').contains(&ch.to_ascii_lowercase()),
+                        _ => false,
+                    }
+                };
+
+                // Collect digits (and underscores)
                 while let Some(&next_c) = iter.peek() {
-                    if next_c.is_ascii_digit() || next_c == '_' {
-                        if next_c != '_' { num_str.push(next_c); }
-                        iter.next(); // Consume digit or underscore
-                    } else if next_c == '.' && !is_float {
-                        // Check if the char after '.' is also a digit for float
-                        // Avoid consuming '.' if it's part of '..' operator
+                    if next_c == '_' {
+                        iter.next(); consumed += 1; // skip underscore
+                    } else if is_valid_digit(next_c) {
+                        digits.push(iter.next().unwrap());
+                        consumed += 1;
+                    } else if next_c == '.' && radix == 10 && !is_float {
+                        // Float like 123.45 (only in decimal)
+                        // Check not '..' and that a digit follows
                         let mut peek_ahead = iter.clone();
-                        peek_ahead.next(); // Consume the '.'
+                        peek_ahead.next();
                         if peek_ahead.peek().map_or(false, |ch| ch.is_ascii_digit()) {
                             is_float = true;
-                            num_str.push(iter.next().unwrap()); // Consume '.'
-                        } else {
-                            break; // Don't consume '.', it's likely field access or range
+                            digits.push('.');
+                            iter.next(); consumed += 1; // consume '.'
+                            // collect fractional digits
+                            while let Some(&frac_c) = iter.peek() {
+                                if frac_c.is_ascii_digit() {
+                                    digits.push(iter.next().unwrap());
+                                    consumed += 1;
+                                } else { break; }
+                            }
                         }
-                    } else if (next_c == 'e' || next_c == 'E') && is_float {
-                        // Handle exponent part later
-                        break; // Basic implementation for now
+                        break;
                     } else {
                         break;
                     }
                 }
-                column += num_str.chars().filter(|&ch| ch != '_').count(); // Update column correctly
+
+                // Optional integer suffix: i8/i16/i32/i64/u8/u16/u32/u64
+                let mut kind: Option<crate::ast::IntKind> = None;
+                if !is_float {
+                    if let Some(&peek_c) = iter.peek() {
+                        if peek_c == 'i' || peek_c == 'u' {
+                            let mut probe = iter.clone();
+                            let mut suffix = String::new();
+                            // Consume up to 3 characters for i/u and digits
+                            while let Some(&ch) = probe.peek() {
+                                if ch.is_ascii_alphanumeric() { suffix.push(ch); probe.next(); }
+                                else { break; }
+                                if suffix.len() > 3 { break; }
+                            }
+                            let matched = match suffix.as_str() {
+                                "i8" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W8)),
+                                "i16" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W16)),
+                                "i32" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W32)),
+                                "i64" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W64)),
+                                "u8" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W8)),
+                                "u16" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W16)),
+                                "u32" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W32)),
+                                "u64" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W64)),
+                                _ => None,
+                            };
+                            if let Some(k) = matched {
+                                // Commit consumption
+                                for _ in 0..suffix.len() { iter.next(); consumed += 1; }
+                                kind = Some(k);
+                            }
+                        }
+                    }
+                }
+
+                column += consumed; // update column by how many chars we consumed including first
 
                 if is_float {
-                    // Parse float literal
                     let decimal_places = 4;
                     let multiplier = 10_u64.pow(decimal_places);
-                    match num_str.parse::<f64>() {
+                    match digits.parse::<f64>() {
                         Ok(f) => {
                             let fixed = (f * multiplier as f64).round() as u64;
                             push_token(TokenKind::FloatLiteral(fixed), make_location(line, start_col));
@@ -330,9 +400,10 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         Err(_) => { /* Error handling */ }
                     }
                 } else {
-                    // Parse integer literal
-                    match num_str.parse::<i64>() {
-                        Ok(i) => push_token(TokenKind::IntLiteral(i), make_location(line, start_col)),
+                    // convert digits (without underscores) in given radix
+                    let clean: String = digits.chars().filter(|&ch| ch != '_').collect();
+                    match u128::from_str_radix(&clean, radix) {
+                        Ok(val) => push_token(TokenKind::IntLiteral { value: val, radix, kind }, make_location(line, start_col)),
                         Err(_) => { /* Error handling */ }
                     }
                 }

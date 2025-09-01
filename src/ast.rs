@@ -2,8 +2,14 @@ use crate::errors::SourceLocation;
 use crate::symbol_table::SymbolType;
 
 #[derive(Debug, Clone, PartialEq, Hash)]
+pub enum IntWidth { W8, W16, W32, W64 }
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub enum IntKind { Signed(IntWidth), Unsigned(IntWidth) }
+
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Value {
-    Int(i64),
+    Int { value: u128, kind: Option<IntKind> },
     Float(u64),
     String(String),
     Bool(bool),

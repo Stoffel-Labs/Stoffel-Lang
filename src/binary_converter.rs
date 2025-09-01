@@ -305,7 +305,7 @@ fn estimate_register_count(chunk: &BytecodeChunk) -> usize {
     // Determine separate usage of clear vs secret physical registers and return their sum.
     // Convention: clear registers are in the low bank [0, SECRET_REGISTER_START),
     // secret registers are in [SECRET_REGISTER_START, MAX_REGISTERS).
-    const MAX_REGISTERS: usize = 64; // Must stay consistent with codegen/register allocator
+    const MAX_REGISTERS: usize = 32; // Must stay consistent with codegen/register allocator
     const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
 
     let mut max_clear: Option<usize> = None; // absolute index within clear bank
@@ -501,7 +501,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
     fn infer_reg_types(func: &CompiledFunction, constants: &Vec<Value>) -> Vec<Ty> {
         // Size the register type vector by the absolute max register index used, not by func.register_count,
         // because register_count is (clear_used + secret_used), while physical indices are absolute.
-        const MAX_REGISTERS: usize = 64;
+        const MAX_REGISTERS: usize = 32;
         const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
 
         let mut max_abs: usize = 0;
@@ -637,7 +637,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
             let _ = writeln!(out, "  ; inferred return: {}", rty);
         }
         // Compute clear/secret register usage for display
-        const MAX_REGISTERS: usize = 64;
+        const MAX_REGISTERS: usize = 32;
         const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2;
         let mut max_clear: Option<usize> = None;
         let mut max_secret_abs: Option<usize> = None;
