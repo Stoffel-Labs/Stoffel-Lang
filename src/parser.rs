@@ -456,7 +456,7 @@ impl<'a> Parser<'a> {
         })?;
 
         match &token_info.kind {
-            TokenKind::IntLiteral(i) => Ok(AstNode::Literal(Value::Int(*i))),
+            TokenKind::IntLiteral { value, kind, .. } => Ok(AstNode::Literal(Value::Int { value: *value, kind: kind.clone() })), 
             TokenKind::FloatLiteral(f) => Ok(AstNode::Literal(Value::Float(*f))),
             TokenKind::StringLiteral(s) => Ok(AstNode::Literal(Value::String(s.clone()))),
             TokenKind::BoolLiteral(b) => Ok(AstNode::Literal(Value::Bool(*b))),

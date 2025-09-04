@@ -21,7 +21,9 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn int_literal_value(node: &AstNode) -> Option<i128> {
-        if let AstNode::Literal(Value::Int(i)) = node { Some(*i as i128) } else { None }
+        if let AstNode::Literal(Value::Int { value, .. }) = node {
+            if *value <= i128::MAX as u128 { Some(*value as i128) } else { None }
+        } else { None }
     }
 
     fn check_integer_compat(&mut self, src_node: Option<&AstNode>, src_type: &SymbolType, dst_type: &SymbolType, location: crate::errors::SourceLocation) -> Result<(), ()> {
@@ -291,7 +293,21 @@ impl<'a> SemanticAnalyzer<'a> {
         match node {
             // --- Leaf Nodes ---
             AstNode::Literal(value) => Ok((AstNode::Literal(value.clone()), match value {
-                Value::Int(_) => SymbolType::Int64,
+                Value::Int { kind, .. } => match kind {
+                    Some(crate::ast::IntKind::Signed(w)) => match w {
+                        crate::ast::IntWidth::W8 => SymbolType::Int8,
+                        crate::ast::IntWidth::W16 => SymbolType::Int16,
+                        crate::ast::IntWidth::W32 => SymbolType::Int32,
+                        crate::ast::IntWidth::W64 => SymbolType::Int64,
+                    },
+                    Some(crate::ast::IntKind::Unsigned(w)) => match w {
+                        crate::ast::IntWidth::W8 => SymbolType::UInt8,
+                        crate::ast::IntWidth::W16 => SymbolType::UInt16,
+                        crate::ast::IntWidth::W32 => SymbolType::UInt32,
+                        crate::ast::IntWidth::W64 => SymbolType::UInt64,
+                    },
+                    None => SymbolType::Int64,
+                },
                 Value::Float(_) => SymbolType::Float,
                 Value::String(_) => SymbolType::String,
                 Value::Bool(_) => SymbolType::Bool,

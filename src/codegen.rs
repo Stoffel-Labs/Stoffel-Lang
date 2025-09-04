@@ -6,7 +6,7 @@ use crate::symbol_table::SymbolType;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-const MAX_REGISTERS: usize = 64; // Example limit
+const MAX_REGISTERS: usize = 32; // Example limit
 const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2; // Registers >= this are secret
 
 /// It receives the generator state, the function definition node, and the pragma node.
@@ -91,7 +91,23 @@ impl CodeGenerator {
             AstNode::Literal(lit) => { // Literals are initially clear
                 let vr = self.allocate_virtual_register(false); // Literals are clear
                 let constant = match lit {
-                    crate::ast::Value::Int(i) => Constant::I64(*i),
+                    crate::ast::Value::Int { value, kind } => {
+                        match kind {
+                            Some(crate::ast::IntKind::Signed(w)) => match w {
+                                crate::ast::IntWidth::W8 => Constant::I8(*value as i8),
+                                crate::ast::IntWidth::W16 => Constant::I16(*value as i16),
+                                crate::ast::IntWidth::W32 => Constant::I32(*value as i32),
+                                crate::ast::IntWidth::W64 => Constant::I64(*value as i64),
+                            },
+                            Some(crate::ast::IntKind::Unsigned(w)) => match w {
+                                crate::ast::IntWidth::W8 => Constant::U8(*value as u8),
+                                crate::ast::IntWidth::W16 => Constant::U16(*value as u16),
+                                crate::ast::IntWidth::W32 => Constant::U32(*value as u32),
+                                crate::ast::IntWidth::W64 => Constant::U64(*value as u64),
+                            },
+                            None => Constant::I64(*value as i64), // default behavior
+                        }
+                    }
                     crate::ast::Value::Float(f) => Constant::Float(*f as i64),
                     crate::ast::Value::String(s) => Constant::String(s.clone()),
                     crate::ast::Value::Bool(b) => Constant::Bool(*b),

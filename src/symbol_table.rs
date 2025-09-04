@@ -133,14 +133,17 @@ impl SymbolType {
     pub fn from_ast(node: &AstNode) -> Self {
         match node {
             AstNode::Identifier(name, _) => match name.as_str() {
-                "int64" => SymbolType::Int64,
-                "int32" => SymbolType::Int32,
-                "int16" => SymbolType::Int16,
-                "int8" => SymbolType::Int8,
-                "uint64" => SymbolType::UInt64,
-                "uint32" => SymbolType::UInt32,
-                "uint16" => SymbolType::UInt16,
-                "uint8" => SymbolType::UInt8,
+                // Signed ints (aliases)
+                "i64" | "int64" => SymbolType::Int64,
+                "i32" | "int32" => SymbolType::Int32,
+                "i16" | "int16" => SymbolType::Int16,
+                "i8"  | "int8"  => SymbolType::Int8,
+                // Unsigned ints (aliases)
+                "u64" | "uint64" => SymbolType::UInt64,
+                "u32" | "uint32" => SymbolType::UInt32,
+                "u16" | "uint16" => SymbolType::UInt16,
+                "u8"  | "uint8"  => SymbolType::UInt8,
+                // Other primitives
                 "float" => SymbolType::Float,
                 "string" => SymbolType::String,
                 "bool" => SymbolType::Bool,
