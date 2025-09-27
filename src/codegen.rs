@@ -207,8 +207,9 @@ impl CodeGenerator {
                         Ok((dest_vr, result_is_secret))
                     }
                     "==" | "!=" | "<" | "<=" | ">" | ">=" => {
-                        // Comparison operators produce a boolean result, which is always clear.
-                        result_is_secret = false; // Override secrecy for comparisons
+                        // Comparison operators produce a boolean result.
+                        // Secrecy follows operands: secret if either side is secret.
+                        result_is_secret = left_is_secret || right_is_secret;
                         let bool_dest_vr = self.allocate_virtual_register(result_is_secret);
 
                         // Emit CMP instruction
@@ -231,6 +232,7 @@ impl CodeGenerator {
                                 self.emit(jump_instruction);
 
                                 // If condition is false
+                                // Load clear/secret false according to destination secrecy
                                 self.identified_constants.push(Constant::Bool(false));
                                 self.emit(Instruction::LDI(bool_dest_vr.0, crate::core_types::Value::Bool(false)));
                                 self.emit(Instruction::JMP(end_label.clone()));
@@ -345,7 +347,9 @@ impl CodeGenerator {
             AstNode::IfExpression { condition, then_branch, else_branch } => {
                 let (condition_vr, condition_is_secret) = self.compile_node(condition)?;
                 if condition_is_secret {
-                    return Err(CompilerError::semantic_error("Cannot use secret value as condition in 'if'", condition.location()));
+                    return Err(CompilerError::semantic_error(
+                        "Cannot use secret value as condition in 'if'",
+                        condition.location()));
                 }
 
                 // Compare the boolean condition VR against Bool(false)
@@ -441,7 +445,9 @@ impl CodeGenerator {
                 // Compile condition (assume clear for CMP/JMP)
                 let (condition_vr, condition_is_secret) = self.compile_node(condition)?;
                 if condition_is_secret {
-                    return Err(CompilerError::semantic_error("Cannot use secret value as condition in 'while'", condition.location()));
+                    return Err(CompilerError::semantic_error(
+                        "Cannot use secret value as condition in 'while'",
+                        condition.location()));
                 }
 
                 // Compare the boolean condition VR against Bool(false)
