@@ -3,40 +3,42 @@
 
 # Style 1: obj.method(arg1, arg2) -> method(obj, arg1, arg2)
 # Assuming 'my_obj' exists and has a 'process' method
-let result = my_obj.process(data, config)
+var result = my_obj.process(data, config)
 
 # Style 3: obj method arg1 arg2 -> method(obj, arg1, arg2)
 # (Requires parser support for command calls)
-let result = my_obj process data config
+var result = my_obj process data config
 
 # Style 4: arg1.op(arg2) -> op(arg1, arg2)
 # Assuming 'a' and 'b' exist
-let sum = a.add(b)
-let difference = a.subtract(b)
+var sum = a.add(b)
+var difference = a.subtract(b)
 
 # Nested calls: a.b(c).d(e) -> d(b(a, c), e)
-let final_result = first_obj.step_one(input).step_two(modifier)
+var final_result = first_obj.step_one(input).step_two(modifier)
 
 # Chained field access before call: obj.field.method(arg) -> method(obj.field, arg)
-let field_result = complex_obj.settings.apply(value)
+var field_result = complex_obj.settings.apply(value)
 
 # Note: Actual execution requires function definitions and object types.
 # These lines primarily test the AST transformation logic.
 # We can use placeholder variables for now.
 
-let my_obj = nil # Placeholder
-let data = 1
-let config = 2
-let a = 10
-let b = 5
-let first_obj = nil # Placeholder
-let input = 100
-let modifier = 10
-let complex_obj = nil # Placeholder
-let value = 50
+var my_obj = nil # Placeholder
+var data = 1
+var config = 2
+var a = 10
+var b = 5
+var first_obj = nil # Placeholder
+var input = 100
+var modifier = 10
+var complex_obj = nil # Placeholder
+var value = 50
 
 # Example assignments to trigger parsing (if needed)
-let temp1 = 1 # my_obj.process(data, config)
-let temp2 = 2 # a.add(b)
-let temp3 = 3 # first_obj.step_one(input).step_two(modifier)
-let temp4 = 4 # complex_obj.settings.apply(value)
+var temp1 = 1 # my_obj.process(data, config)
+var temp2 = 2 # a.add(b)
+var temp3 = 3 # first_obj.step_one(input).step_two(modifier)
+var temp4 = 4 # complex_obj.settings.apply(value)
+
+# No explicit main; this file is a UFCS transform showcase

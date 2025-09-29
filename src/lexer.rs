@@ -12,6 +12,7 @@ pub enum TokenKind {
     Identifier(String),
     Keyword(String),
     Operator(String),
+    Arrow, // ->
     // Literals
     IntLiteral { value: u128, radix: u32, kind: Option<crate::ast::IntKind> }, // includes bases and optional suffix
     FloatLiteral(u64), // this is a fixed point
@@ -45,9 +46,9 @@ fn is_operator_char(c: char) -> bool {
 
 fn get_keywords() -> HashMap<String, TokenKind> {
     let mut keywords = HashMap::new();
-    keywords.insert("let".to_string(), TokenKind::Keyword("let".to_string()));
     keywords.insert("var".to_string(), TokenKind::Keyword("var".to_string()));
     keywords.insert("proc".to_string(), TokenKind::Keyword("proc".to_string()));
+    keywords.insert("main".to_string(), TokenKind::Keyword("main".to_string()));
     keywords.insert("type".to_string(), TokenKind::Keyword("type".to_string()));
     keywords.insert("object".to_string(), TokenKind::Keyword("object".to_string()));
     keywords.insert("enum".to_string(), TokenKind::Keyword("enum".to_string()));
@@ -66,6 +67,8 @@ fn get_keywords() -> HashMap<String, TokenKind> {
     keywords.insert("nil".to_string(), TokenKind::NilLiteral);
     keywords.insert("secret".to_string(), TokenKind::Keyword("secret".to_string())); // The special keyword
     keywords.insert("discard".to_string(), TokenKind::Keyword("discard".to_string()));
+    // Note: 'let' intentionally not added as a keyword anymore. It will be tokenized
+    // as an Identifier to allow targeted parse-time diagnostics and potential use as a name.
     // Add more keywords as needed (e.g., and, or, not, is, as, import, from, export, etc.)
     keywords
 }
@@ -91,6 +94,9 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
         tokens.push(TokenInfo { kind, location: loc });
     };
 
+    // Note: 'main' is reserved as a keyword to denote the entry function declaration
+    // or the legacy 'main' function header. It is not available as a general identifier.
+    // The parser decides its role based on context.
 
     loop {
 
@@ -264,6 +270,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
             }
             ':' => { push_token(TokenKind::Colon, make_location(line, column)); column += 1; }
             '=' => {
+                // Allow '==' as equality; single '=' is assignment token (used in expressions only now)
                 if iter.peek() == Some(&'=') {
                     iter.next(); // Consume second '='
                     push_token(TokenKind::Operator("==".to_string()), make_location(line, column));
@@ -271,6 +278,25 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 } else {
                     push_token(TokenKind::Assign, make_location(line, column));
                     column += 1;
+                }
+            }
+            '-' => {
+                // Support '->' arrow
+                if iter.peek() == Some(&'>') {
+                    iter.next();
+                    push_token(TokenKind::Arrow, make_location(line, column));
+                    column += 2;
+                } else {
+                    // Fallback to operator collection (e.g., '-', '->' handled above)
+                    let start_col = column;
+                    let mut op = "-".to_string();
+                    while let Some(&next_c) = iter.peek() {
+                        if is_operator_char(next_c) && next_c != '>' { // avoid swallowing '>' which would form '->'
+                            op.push(iter.next().unwrap());
+                        } else { break; }
+                    }
+                    column += op.len();
+                    push_token(TokenKind::Operator(op), make_location(line, start_col));
                 }
             }
             // Other operators (handle multi-char ones like !=, <=, >=)

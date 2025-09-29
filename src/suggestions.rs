@@ -27,7 +27,7 @@ pub fn suggest_identifier(misspelled: &str, valid_identifiers: &[String]) -> Opt
 
 pub fn suggest_keyword(misspelled: &str) -> Option<String> {
     let keywords = vec![
-        "let", "var", "proc", "type", "object", "enum", "if", "else", "elif",
+        "var", "proc", "type", "object", "enum", "if", "else", "elif",
         "while", "for", "in", "return", "yield", "break", "continue", "true",
         "false", "nil", "secret", "and", "or", "not", "is", "as", "import", "from"
     ];

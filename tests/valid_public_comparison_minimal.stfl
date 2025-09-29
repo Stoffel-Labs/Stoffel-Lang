@@ -1,7 +1,7 @@
-proc main() =
-  let a: int64 = 1
-  let b: int64 = 2
-  let s: secret int64 = 0
+main main() -> nil:
+  var a: int64 = 1
+  var b: int64 = 2
+  var s: secret int64 = 0
 
   if a < b:
     # simple arithmetic to ensure code path executes

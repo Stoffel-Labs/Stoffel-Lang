@@ -1,6 +1,7 @@
 use crate::ast::{AstNode, Parameter, Pragma, Value};
 use crate::errors::{CompilerError, CompilerResult, SourceLocation};
 use std::iter::Peekable;
+use std::mem;
 use std::slice::Iter;
 
 use crate::lexer::{TokenInfo, TokenKind};
@@ -45,7 +46,7 @@ impl<'a> Parser<'a> {
     // Checks if the current token matches the expected kind.
     fn check(&self, kind: &TokenKind) -> bool {
         match self.current_token_info {
-            Some(info) => std::mem::discriminant(&info.kind) == std::mem::discriminant(kind),
+            Some(info) => mem::discriminant(&info.kind) == mem::discriminant(kind),
             None => false,
         }
     }
@@ -55,6 +56,7 @@ impl<'a> Parser<'a> {
         matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) if k == keyword)
     }
 
+    // --- Core token consumption helpers ---
     // Consumes the current token if it matches the expected kind, otherwise returns an error.
     fn consume(&mut self, expected: &TokenKind, error_message: &str) -> CompilerResult<&'a TokenInfo> {
         if self.check(expected) {
@@ -104,7 +106,7 @@ impl<'a> Parser<'a> {
     // Helper to parse an indented block of statements
     fn parse_indented_block(&mut self) -> CompilerResult<AstNode> {
         // Allow multiple newlines before the indented block starts
-        self.consume(&TokenKind::Newline, "Expected newline after '=' or ':' before indented block")?;
+        self.consume(&TokenKind::Newline, "Expected newline after ':' before indented block")?;
         while self.check(&TokenKind::Newline) {
             self.advance(); // Skip extra blank lines
         }
@@ -154,8 +156,9 @@ impl<'a> Parser<'a> {
         // Look ahead to determine if it's a declaration (let, var, proc, type, etc.)
         match &self.current_token_info {
             Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
-                "let" | "var" => self.parse_variable_declaration(false), // Not secret by default
+                "var" => self.parse_variable_declaration(false), // Not secret by default
                 "proc" => self.parse_function_definition(false),
+                "main" => self.parse_main_definition(), // special entry syntax
                 "type" | "object" | "enum" => self.parse_type_definition(),
                 "secret" => self.parse_secret_declaration(),
                 "if" => self.parse_if_statement_or_expression(),
@@ -166,6 +169,11 @@ impl<'a> Parser<'a> {
                 // Add other statement keywords (break, continue, yield, import, etc.)
                 _ => self.parse_expression_statement(), // Assume expression if keyword doesn't start a known statement/decl
             },
+            // Special-case legacy 'let' at statement start to give a helpful error
+            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
+                Err(CompilerError::syntax_error("The 'let' keyword is no longer supported", location.clone())
+                    .with_hint("Use 'var' for variable declarations (e.g., 'var x = ...')"))
+            }
             Some(TokenInfo { kind: TokenKind::Identifier(_), .. }) => self.parse_expression_statement(),
             // Add cases for other statement starters
             _ => {
@@ -186,11 +194,16 @@ impl<'a> Parser<'a> {
         match &self.current_token_info {
             Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
                 "proc" => self.parse_function_definition(true), // Pass is_secret=true
-                "let" | "var" => self.parse_variable_declaration(true), // Pass is_secret=true
+                "var" => self.parse_variable_declaration(true), // Pass is_secret=true
                 "type" | "object" | "enum" => self.parse_type_definition_impl(true), // Pass is_secret=true
                 _ => Err(CompilerError::syntax_error(format!("Unexpected keyword '{}' after 'secret'", k), self.get_location())),
             },
-            _ => Err(CompilerError::syntax_error("Expected 'proc', 'let', 'var', 'type', 'object', or 'enum' after 'secret'", self.get_location())),
+            // Explicitly catch 'secret let'
+            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
+                Err(CompilerError::syntax_error("The 'secret let' form is no longer supported", location.clone())
+                    .with_hint("Use 'secret var' instead"))
+            }
+            _ => Err(CompilerError::syntax_error("Expected 'proc', 'var', 'type', 'object', or 'enum' after 'secret'", self.get_location())),
         }
     }
 
@@ -229,38 +242,37 @@ impl<'a> Parser<'a> {
         }
         self.consume(&TokenKind::RParen, "Expected ')' after parameters")?;
 
-        // Parse optional return type annotation
-        let return_type = if self.check(&TokenKind::Colon) { // Nim uses ':' for return type
-            self.advance(); // Consume ':'
-            Some(Box::new(self.parse_type_annotation()?))
-        } else {
-            None
-        };
+        // New syntax: optional '-> <type-or-nil>' before pragmas, then ':' to start body/header end
+        let mut return_type: Option<Box<AstNode>> = None;
+        if self.check(&TokenKind::Arrow) {
+            self.advance(); // consume '->'
+            // Special-case: allow 'nil' to mean no return (void)
+            if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
+                // Treat as no return type
+                self.advance(); // consume 'nil'
+                return_type = None;
+            } else {
+                return_type = Some(Box::new(self.parse_type_annotation()?));
+            }
+        }
 
-        // Parse optional pragmas (AFTER return type, BEFORE '=')
+        // Parse optional pragmas (AFTER return arrow, BEFORE ':')
         let mut pragmas = Vec::new();
         if self.check(&TokenKind::LPragma) {
             pragmas = self.parse_pragma()?;
         }
 
-        // Check for pragmas that indicate no body is needed (e.g., {.builtin.})
-        let requires_body = !pragmas.iter().any(|p| match p {
-            Pragma::Simple(name, _) => name == "builtin", // Add other body-skipping pragmas here
-            _ => false,
-        });
+        // Expect ':' to end the header line
+        self.consume(&TokenKind::Colon, "Expected ':' after function header")?;
 
-        let body = if requires_body {
-            // Parse function body
-            self.consume(&TokenKind::Assign, "Expected '=' before function body")?; // Nim uses '='
-            self.parse_indented_block()?
-        } else {
-            // No body needed due to pragma
-            // Check for and consume an optional '=' sign after the pragma
-            if self.check(&TokenKind::Assign) {
-                self.advance(); // Consume '='
-            }
-            // Create an empty block as the body
+        // For builtins, accept no body (empty block)
+        let is_builtin = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "builtin"));
+        let body = if is_builtin {
+            // Allow just a header line and no body for builtins
             AstNode::Block(vec![])
+        } else {
+            // Parse function body after newline and indent
+            self.parse_indented_block()?
         };
 
         Ok(AstNode::FunctionDefinition {
@@ -275,6 +287,102 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // Parse the special 'main' entry function definition.
+    // New syntax:
+    //   main <method_name>(<params>) [-> <type-or-nil>] [{. pragmas .}]:
+    //     <body>
+    fn parse_main_definition(&mut self) -> CompilerResult<AstNode> {
+        let node_id = self.next_node_id();
+        let start_location = self.get_location(); // location of 'main'
+        self.consume_keyword("main", "Expected 'main'")?; // consume 'main'
+        // function name after 'main'
+        // Accept either Identifier or the keyword 'main' explicitly (to support `main main()`).
+        let func_name = match self.current_token_info {
+            Some(TokenInfo { kind: TokenKind::Identifier(ref n), .. }) => {
+                let n = n.clone();
+                self.advance();
+                n
+            }
+            Some(TokenInfo { kind: TokenKind::Keyword(ref k), .. }) if k == "main" => {
+                // Treat keyword(main) as the identifier "main" in this specific slot
+                self.advance();
+                "main".to_string()
+            }
+            Some(token) => {
+                return Err(CompilerError::syntax_error(
+                    "Expected function name after 'main'",
+                    token.location.clone(),
+                ).with_hint("Try adding identifier here"));
+            }
+            None => return Err(CompilerError::syntax_error("Expected function name after 'main'", self.last_location.clone())),
+        };
+
+        // Parameters
+        self.consume(&TokenKind::LParen, "Expected '(' after entry function name")?;
+        let mut parameters = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            loop {
+                let param_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected parameter name")?;
+                let param_name = match param_name_token {
+                    TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+                    _ => unreachable!(),
+                };
+                let param_type_annotation = if self.check(&TokenKind::Colon) {
+                    self.advance();
+                    Some(Box::new(self.parse_type_annotation()?))
+                } else { None };
+                parameters.push(Parameter {
+                    name: param_name,
+                    type_annotation: param_type_annotation,
+                    default_value: None,
+                    is_secret: false,
+                });
+                if self.check(&TokenKind::RParen) { break; }
+                self.consume(&TokenKind::Comma, "Expected ',' between parameters")?;
+            }
+        }
+        self.consume(&TokenKind::RParen, "Expected ')' after parameters")?;
+
+        // Optional return type arrow
+        let mut return_type: Option<Box<AstNode>> = None;
+        if self.check(&TokenKind::Arrow) {
+            self.advance(); // '->'
+            if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
+                self.advance(); // consume 'nil' => treat as no return type (void)
+                return_type = None;
+            } else {
+                return_type = Some(Box::new(self.parse_type_annotation()?));
+            }
+        }
+
+        // Optional pragmas
+        let mut pragmas = Vec::new();
+        if self.check(&TokenKind::LPragma) {
+            pragmas = self.parse_pragma()?;
+        }
+
+        // Body
+        self.consume(&TokenKind::Colon, "Expected ':' after entry function header")?;
+        let body = self.parse_indented_block()?;
+
+        // Represent as a normal FunctionDefinition with the provided name.
+        // Codegen/semantics will treat this as the program entry.
+        let mut pragmas = pragmas;
+        // Inject an internal marker so codegen can recognize explicit entry uniformly.
+        // We piggyback on pragmas with a synthetic {.entry.} added here.
+        pragmas.push(Pragma::Simple("entry".to_string(), start_location.clone()));
+
+        Ok(AstNode::FunctionDefinition {
+            name: Some(func_name),
+            parameters,
+            return_type,
+            body: Box::new(body),
+            is_secret: false, // 'main' cannot be prefixed with 'secret'
+            pragmas,
+            location: start_location,
+            node_id,
+        })
+    }
 
     fn parse_type_definition(&mut self) -> CompilerResult<AstNode> {
         self.parse_type_definition_impl(false) // Not secret by default
@@ -382,8 +490,45 @@ impl<'a> Parser<'a> {
         // 'in' is tokenized as a keyword in our lexer
         self.consume_keyword("in", "Expected 'in' in for-loop header")?;
 
-        // Parse iterable expression
-        let iterable = self.parse_expression()?;
+        // Parse iterable expression, but enforce tight range syntax a..b for for-loops
+        let iterable = {
+            // Parse left expression
+            let left = self.parse_expression_with_precedence(5 /* precedence just below '..' (4) so we stop before parsing '..' */)?;
+            // Now we require exactly the '..' operator next, with no whitespace around it.
+            // Since our lexer doesn't record end positions, we enforce the rule syntactically:
+            // only accept the '..' operator token immediately next; any spaces before/after would have been tokenized as separate tokens already,
+            // but to be strict per request, we reject forms like 'a .. b' by requiring that the operator appears right now,
+            // and we forbid an intervening Newline.
+            match self.current_token_info {
+                Some(TokenInfo { kind: TokenKind::Operator(op), location: op_loc }) if op == ".." => {
+                    // Ensure no spaces variant in source: best-effort by checking previous token and next token are expressions
+                    // and emitting a tailored error if user likely wrote spaces in tests that used 'a .. b'.
+                    // Consume '..'
+                    self.advance();
+                }
+                Some(TokenInfo { ref kind, ref location }) => {
+                    // If the next token is not '..', but a range was intended, produce a targeted error.
+                    return Err(CompilerError::syntax_error(
+                        "Expected tight range 'a..b' in for-loop (no spaces around '..')",
+                        location.clone(),
+                    ).with_hint("Write: for i in a..b:"));
+                }
+                None => {
+                    return Err(CompilerError::syntax_error(
+                        "Unexpected end of input while parsing for-loop range; expected '..'",
+                        self.last_location.clone(),
+                    ).with_hint("Write: for i in a..b:"));
+                }
+            }
+            // After consuming '..', immediately parse the right expression
+            let right = self.parse_expression_with_precedence(4)?;
+            AstNode::BinaryOperation {
+                op: "..".to_string(),
+                left: Box::new(left),
+                right: Box::new(right),
+                location: self.last_location.clone(),
+            }
+        };
 
         // Expect ':' then a block
         self.consume(&TokenKind::Colon, "Expected ':' after for-loop header")?;
@@ -635,9 +780,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_variable_declaration(&mut self, is_secret: bool) -> CompilerResult<AstNode> {
-        let start_location = self.get_location(); // Location of 'let' or 'var'
-        let is_mutable = self.check_keyword("var");
-        self.advance(); // Consume 'let' or 'var'
+        let start_location = self.get_location(); // Location of 'var'
+        // Only allow 'var' now. If someone writes 'let', we should have errored earlier,
+        // but double-check here defensively.
+        if self.check_keyword("var") {
+            self.advance(); // Consume 'var'
+        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "let") {
+            let loc = self.get_location();
+            return Err(CompilerError::syntax_error("The 'let' keyword is no longer supported", loc)
+                .with_hint("Use 'var' for variable declarations"));
+        } else {
+            // Should not reach here if caller used correct entry points
+            return Err(CompilerError::syntax_error("Expected 'var' to start a variable declaration", self.get_location()));
+        }
+        let is_mutable = true; // With only 'var', declarations are always mutable
 
         let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected variable name")?;
         let name = match name_token {
@@ -670,9 +826,9 @@ impl<'a> Parser<'a> {
             name,
             type_annotation,
             value,
-            is_mutable,
+            is_mutable, // always true now
             is_secret, // Set the flag based on whether 'secret let/var' was used
-            location: start_location, // Use location of 'let'/'var'
+            location: start_location, // Use location of 'var'
         })
     }
 

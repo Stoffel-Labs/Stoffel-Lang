@@ -3,10 +3,10 @@
 # +3 for FizzBuzz (divisible by 15), +1 for Fizz (divisible by 3), +2 for Buzz (divisible by 5)
 # Returns the final sum so the VM runner can assert on a single integer.
 
-proc main() =
-  let sum = 0
+main main() -> int64:
+  var sum = 0
 
-  for i in 1 .. 100:
+  for i in 1..100:
     if (i % 15) == 0:
       sum = sum + 3
     else:

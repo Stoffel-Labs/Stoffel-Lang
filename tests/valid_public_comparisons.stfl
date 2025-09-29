@@ -1,9 +1,9 @@
-proc main() =
-  let age: int64 = 30
-  let bonusYears: int64 = 3
-  let threshold: int64 = 25
-  let upper: int64 = 40
-  let salary: secret int64 = 5000
+main main() -> nil:
+  var age: int64 = 30
+  var bonusYears: int64 = 3
+  var threshold: int64 = 25
+  var upper: int64 = 40
+  var salary: secret int64 = 5000
 
   # Basic relational operators on public ints inside if
   if age > threshold:
@@ -34,7 +34,7 @@ proc main() =
     salary = salary + 2
 
   # Keep the compiler from optimizing everything away; touch public var
-  let touch: int64 = 0
+  var touch: int64 = 0
   if threshold < upper:
     # no-op
     touch = touch

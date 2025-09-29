@@ -138,6 +138,29 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.symbol_table.declare_symbol(info);
             },
             AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
+                // Entry constraints: disallow 'secret main <name>' (keyword 'main' cannot be prefixed by 'secret').
+                // We cannot directly detect the header keyword here, but we enforce that
+                // no function used as entry (pragmas include 'entry') is secret.
+                let is_entry = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
+                if is_entry && *is_secret {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        "Entry function cannot be declared 'secret'",
+                        location.clone(),
+                    ));
+                    return Err(());
+                }
+
+                // Disallow 'secret' main explicitly at semantic level (parser doesn't allow 'secret main' keyword).
+                if let Some(n) = name {
+                    if n == "main" && *is_secret {
+                        self.error_reporter.add_error(CompilerError::semantic_error(
+                            "The 'main' entry function cannot be secret",
+                            location.clone(),
+                        ));
+                        return Err(());
+                    }
+                }
+
                 let func_name = name.as_ref().cloned().unwrap_or_else(|| {
                     // TODO: Handle anonymous functions if needed
                     format!("<anonymous_{}:{}>", location.line, location.column)
@@ -157,7 +180,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let ret_type = return_type
                     .as_ref()
                     .map(|rt| SymbolType::from_ast(rt))
-                    .unwrap_or(SymbolType::Void); // Default return type is Void
+                    .unwrap_or(SymbolType::Void); // Default return type is Void (also for '-> nil')
 
                 // Handle 'secret proc' and secret return type annotation
                 let final_return_type = if ret_type.is_secret() || *is_secret {
@@ -431,7 +454,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let ret_type_annotation = return_type
                     .as_ref()
                     .map(|rt| SymbolType::from_ast(rt))
-                    .unwrap_or(SymbolType::Void);
+                    .unwrap_or(SymbolType::Void); // None or '-> nil' means Void
 
                 // Handle 'secret proc' and secret return type annotation
                 let final_return_type = if ret_type_annotation.is_secret() || is_secret {

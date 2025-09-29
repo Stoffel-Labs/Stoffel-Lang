@@ -1,21 +1,21 @@
 # This is a single-line comment
 
 # Literals
-let an_int = 42
-let a_float = 123.456 # Fixed point representation
-let a_string = "Hello, Stoffel!"
-let is_true = true
-let is_false = false
-let nothing = nil
+var an_int = 42
+var a_float = 123.456 # Fixed point representation
+var a_string = "Hello, Stoffel!"
+var is_true = true
+var is_false = false
+var nothing = nil
 
 # Variable Declarations
-let immutable_val = 100 # Inferred type
+var immutable_val = 100 # Inferred type
 var mutable_val = "change me" # Inferred type
 
-let typed_int: int64 = 5
+var typed_int: int64 = 5
 var typed_string: string = "initial"
 
-let no_initial_value: int64 # Requires type annotation
+var no_initial_value: int64 # Requires type annotation
 var mutable_no_initial: string # Requires type annotation
 
 # Assignments
@@ -24,3 +24,5 @@ mutable_no_initial = "assigned now"
 
 # Simple expression statement (assuming function calls are expressions)
 # print("End of basic tests") # Requires function call parsing
+
+# No entry point; this is a basic language feature sample

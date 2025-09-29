@@ -28,6 +28,8 @@ struct CodeGenerator {
     compiled_functions: HashMap<String, BytecodeChunk>,
     // If present, this chunk represents a 'proc main' (main without return type) to be used as program entry.
     main_proc_chunk: Option<BytecodeChunk>,
+    // If present, this chunk represents the explicit entry function compiled via 'main <name>(...)'
+    entry_main_chunk: Option<BytecodeChunk>,
     // Known built-in functions (names only, no bytecode generated).
     known_builtins: HashSet<String>,
     // Pragma handlers: Maps pragma names to their handler functions.
@@ -47,6 +49,7 @@ impl CodeGenerator {
             symbol_table: HashMap::new(),
             compiled_functions: HashMap::new(),
             main_proc_chunk: None,
+            entry_main_chunk: None,
             known_builtins: HashSet::new(),
             pragma_handlers: Self::register_pragma_handlers(),
             identified_constants: Vec::new(),
@@ -629,7 +632,7 @@ impl CodeGenerator {
                 // Store the compiled chunk appropriately.
                 if let Some(func_name) = name {
                     if func_name == "main" && return_type.is_none() {
-                        // Treat 'proc main()' as the program's main chunk.
+                        // Legacy 'proc main()' (no return type): candidate entry program chunk.
                         if self.main_proc_chunk.is_some() {
                             return Err(CompilerError::semantic_error(
                                 "Multiple 'main' procedures defined".to_string(),
@@ -638,9 +641,20 @@ impl CodeGenerator {
                         }
                         self.main_proc_chunk = Some(function_chunk);
                     } else {
+                        // Detect explicit entry: allow pragma "entry" for now; otherwise store as normal function.
                         if self.compiled_functions.contains_key(func_name) {
                             // TODO: Allow overloading later?
                             return Err(CompilerError::semantic_error(format!("Function '{}' already defined", func_name), location.clone()));
+                        }
+                        let is_entry = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
+                        if is_entry {
+                            if self.entry_main_chunk.is_some() {
+                                return Err(CompilerError::semantic_error(
+                                    "Multiple explicit 'main' entries defined".to_string(),
+                                    location.clone(),
+                                ).with_hint("Only one 'main <name>(...)' is allowed"));
+                            }
+                            self.entry_main_chunk = Some(function_chunk.clone());
                         }
                         self.compiled_functions.insert(func_name.clone(), function_chunk);
                     }
@@ -658,6 +672,24 @@ impl CodeGenerator {
 
     /// Finalizes the entire compiled program, including the main chunk and all function chunks.
     fn finalize_program(mut self) -> CompilerResult<CompiledProgram> {
+        // If both an explicit entry main and a legacy proc main exist, error clearly.
+        if self.entry_main_chunk.is_some() && self.main_proc_chunk.is_some() {
+            return Err(CompilerError::semantic_error(
+                "Both explicit 'main' and legacy 'proc main' are defined".to_string(),
+                crate::errors::SourceLocation::default(),
+            ).with_hint("Use only one entry point; prefer 'main <name>(...)'"));
+        }
+
+        // If explicit entry is set, ensure no top-level code and use it as entry chunk.
+        if let Some(entry_chunk) = self.entry_main_chunk.take() {
+            if !self.current_instructions.is_empty() {
+                return Err(CompilerError::semantic_error(
+                    "Cannot mix top-level code with explicit 'main' entry".to_string(),
+                    crate::errors::SourceLocation::default(),
+                ).with_hint("Move top-level code into the entry function declared with 'main'"));
+            }
+            return Ok(CompiledProgram { main_chunk: entry_chunk, function_chunks: self.compiled_functions });
+        }
         // If a 'proc main()' was compiled, prefer it as main only when there are no top-level instructions.
         if let Some(main_proc) = self.main_proc_chunk.take() {
             if self.current_instructions.is_empty() {
