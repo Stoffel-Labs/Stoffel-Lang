@@ -157,7 +157,7 @@ impl<'a> Parser<'a> {
         match &self.current_token_info {
             Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
                 "var" => self.parse_variable_declaration(false), // Not secret by default
-                "proc" => self.parse_function_definition(false),
+                "def" => self.parse_function_definition(false),
                 "main" => self.parse_main_definition(), // special entry syntax
                 "type" | "object" | "enum" => self.parse_type_definition(),
                 "secret" => self.parse_secret_declaration(),
@@ -169,6 +169,13 @@ impl<'a> Parser<'a> {
                 // Add other statement keywords (break, continue, yield, import, etc.)
                 _ => self.parse_expression_statement(), // Assume expression if keyword doesn't start a known statement/decl
             },
+            // Friendly hard error for legacy 'proc' at start of a declaration
+            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "proc" => {
+                Err(CompilerError::syntax_error(
+                    "The 'proc' keyword is no longer supported; use 'def'",
+                    location.clone(),
+                ).with_hint("Rewrite: def name(args) -> type:"))
+            }
             // Special-case legacy 'let' at statement start to give a helpful error
             Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
                 Err(CompilerError::syntax_error("The 'let' keyword is no longer supported", location.clone())
@@ -193,11 +200,18 @@ impl<'a> Parser<'a> {
         // Check what follows 'secret'
         match &self.current_token_info {
             Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
-                "proc" => self.parse_function_definition(true), // Pass is_secret=true
+                "def" => self.parse_function_definition(true), // Pass is_secret=true
                 "var" => self.parse_variable_declaration(true), // Pass is_secret=true
                 "type" | "object" | "enum" => self.parse_type_definition_impl(true), // Pass is_secret=true
                 _ => Err(CompilerError::syntax_error(format!("Unexpected keyword '{}' after 'secret'", k), self.get_location())),
             },
+            // Explicitly catch 'secret proc'
+            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "proc" => {
+                Err(CompilerError::syntax_error(
+                    "The 'proc' keyword is no longer supported; use 'def'",
+                    location.clone(),
+                ).with_hint("Rewrite: secret def name(args) -> type:"))
+            }
             // Explicitly catch 'secret let'
             Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
                 Err(CompilerError::syntax_error("The 'secret let' form is no longer supported", location.clone())
@@ -209,8 +223,8 @@ impl<'a> Parser<'a> {
 
     fn parse_function_definition(&mut self, is_secret: bool) -> CompilerResult<AstNode> {
         let node_id = self.next_node_id(); // Get a unique ID for this function node
-        let start_location = self.get_location(); // Location of 'proc'
-        self.consume_keyword("proc", "Expected 'proc'")?; // Consume 'proc'
+        let start_location = self.get_location(); // Location of 'def'
+        self.consume_keyword("def", "Expected 'def'")?; // Consume 'def'
         let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected function name")?;
         let name = match name_token {
             TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
@@ -280,9 +294,9 @@ impl<'a> Parser<'a> {
             parameters,
             return_type,
             body: Box::new(body),
-            is_secret, // Pass the flag indicating if 'secret proc' was used
+            is_secret, // Pass the flag indicating if 'secret def' was used
             pragmas, // Store parsed pragmas
-            location: start_location, // Use location of 'proc' keyword
+            location: start_location, // Use location of 'def' keyword
             node_id, // Store the unique ID
         })
     }

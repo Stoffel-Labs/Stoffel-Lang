@@ -47,7 +47,7 @@ fn is_operator_char(c: char) -> bool {
 fn get_keywords() -> HashMap<String, TokenKind> {
     let mut keywords = HashMap::new();
     keywords.insert("var".to_string(), TokenKind::Keyword("var".to_string()));
-    keywords.insert("proc".to_string(), TokenKind::Keyword("proc".to_string()));
+    keywords.insert("def".to_string(), TokenKind::Keyword("def".to_string()));
     keywords.insert("main".to_string(), TokenKind::Keyword("main".to_string()));
     keywords.insert("type".to_string(), TokenKind::Keyword("type".to_string()));
     keywords.insert("object".to_string(), TokenKind::Keyword("object".to_string()));

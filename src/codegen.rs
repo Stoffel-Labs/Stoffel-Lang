@@ -26,7 +26,7 @@ struct CodeGenerator {
     symbol_table: HashMap<String, usize>,
     // Compiled functions.
     compiled_functions: HashMap<String, BytecodeChunk>,
-    // If present, this chunk represents a 'proc main' (main without return type) to be used as program entry.
+    // If present, this chunk represents a legacy 'def main' without return type to be used as program entry.
     main_proc_chunk: Option<BytecodeChunk>,
     // If present, this chunk represents the explicit entry function compiled via 'main <name>(...)'
     entry_main_chunk: Option<BytecodeChunk>,
@@ -632,7 +632,7 @@ impl CodeGenerator {
                 // Store the compiled chunk appropriately.
                 if let Some(func_name) = name {
                     if func_name == "main" && return_type.is_none() {
-                        // Legacy 'proc main()' (no return type): candidate entry program chunk.
+                        // Legacy 'def main()' (no return type): candidate entry program chunk.
                         if self.main_proc_chunk.is_some() {
                             return Err(CompilerError::semantic_error(
                                 "Multiple 'main' procedures defined".to_string(),
@@ -672,10 +672,10 @@ impl CodeGenerator {
 
     /// Finalizes the entire compiled program, including the main chunk and all function chunks.
     fn finalize_program(mut self) -> CompilerResult<CompiledProgram> {
-        // If both an explicit entry main and a legacy proc main exist, error clearly.
+        // If both an explicit entry main and a legacy def main exist, error clearly.
         if self.entry_main_chunk.is_some() && self.main_proc_chunk.is_some() {
             return Err(CompilerError::semantic_error(
-                "Both explicit 'main' and legacy 'proc main' are defined".to_string(),
+                "Both explicit 'main' and legacy 'def main' are defined".to_string(),
                 crate::errors::SourceLocation::default(),
             ).with_hint("Use only one entry point; prefer 'main <name>(...)'"));
         }
@@ -690,7 +690,7 @@ impl CodeGenerator {
             }
             return Ok(CompiledProgram { main_chunk: entry_chunk, function_chunks: self.compiled_functions });
         }
-        // If a 'proc main()' was compiled, prefer it as main only when there are no top-level instructions.
+        // If a legacy 'def main()' was compiled, prefer it as main only when there are no top-level instructions.
         if let Some(main_proc) = self.main_proc_chunk.take() {
             if self.current_instructions.is_empty() {
                 return Ok(CompiledProgram {
@@ -698,7 +698,7 @@ impl CodeGenerator {
                     function_chunks: self.compiled_functions,
                 });
             } else {
-                // Preserve the compiled main proc as a normal function.
+                // Preserve the compiled main function as a normal function.
                 self.compiled_functions.insert("main".to_string(), main_proc);
             }
         }

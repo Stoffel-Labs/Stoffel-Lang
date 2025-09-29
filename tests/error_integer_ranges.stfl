@@ -17,7 +17,7 @@ var a32: int32 = 100
 var b8: int8 = a32
 
 # Function argument checks
-proc takes_u8(x: uint8) -> int64:
+def takes_u8(x: uint8) -> int64:
   return 1
 
 # Should pass
