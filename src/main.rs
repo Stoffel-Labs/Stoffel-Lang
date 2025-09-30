@@ -1,8 +1,11 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::Parser as ClapParser; // Alias to avoid name clash with our parser module
+
+const SRC_EXT: &str = "stfl";
+const BIN_EXT: &str = "stflb";
 
 mod ast;
 mod core_types;
@@ -35,7 +38,7 @@ struct CliArgs {
     #[arg(short = 'b', long)]
     binary: bool,
 
-    /// Disassemble a compiled Stoffel binary (.stfl) instead of compiling source
+    /// Disassemble a compiled Stoffel binary (.stflb) instead of compiling source
     #[arg(long, action = clap::ArgAction::SetTrue)]
     disassemble: bool,
 
@@ -73,8 +76,36 @@ fn main() {
 
     let filename = &args.filename;
 
+    // Small helpers for extension enforcement and output path shaping
+    let has_ext = |p: &str, ext: &str| Path::new(p).extension().map(|e| e == ext).unwrap_or(false);
+    let ensure_output_ext = |mut p: PathBuf, required_ext: &str| -> (PathBuf, Option<String>) {
+        let mut warning: Option<String> = None;
+        match p.extension().map(|e| e.to_string_lossy().to_string()) {
+            Some(ext) if ext == required_ext => {}
+            Some(other) => {
+                p.set_extension(required_ext);
+                warning = Some(format!(
+                    "--output had extension '.{}'; adjusted to '.{}' to match required binary format",
+                    other, required_ext
+                ));
+            }
+            None => {
+                p.set_extension(required_ext);
+            }
+        }
+        (p, warning)
+    };
+
     // Disassemble mode: read binary and print human-readable disassembly
     if args.disassemble {
+        // Enforce .stflb input for disassembly
+        if !has_ext(filename, BIN_EXT) {
+            eprintln!(
+                "Error: Disassembly expects a .{} file. Got '{}'\nHint: Use files like 'program.{}'",
+                BIN_EXT, filename, BIN_EXT
+            );
+            process::exit(2);
+        }
         match binary_converter::load_from_file(filename) {
             Ok(bin) => {
                 let text = binary_converter::disassemble(&bin);
@@ -86,6 +117,15 @@ fn main() {
                 process::exit(1);
             }
         }
+    }
+
+    // Compile mode: enforce .stfl source files
+    if !has_ext(filename, SRC_EXT) {
+        eprintln!(
+            "Error: Source files must have .{} extension. Got '{}'\nHint: Rename to something like 'program.{}'",
+            SRC_EXT, filename, SRC_EXT
+        );
+        process::exit(2);
     }
 
     let source = match fs::read_to_string(filename) {
@@ -145,14 +185,21 @@ fn main() {
             // Generate VM-compatible binary if requested
             if args.binary {
                 // Determine output file path
-                let output_path = match &args.output {
-                    Some(path) => path.clone(),
-                    None => {
-                        // Default to source filename with .stfl extension
-                        let mut default_path = file_path.with_extension("stfl").to_string_lossy().to_string();
-                        println!("No output file specified, using default: {}", default_path);
-                        default_path
+                let output_path: String = {
+                    let chosen = match &args.output {
+                        Some(path) => PathBuf::from(path),
+                        None => {
+                            // Default to source filename with .stflb extension
+                            file_path.with_extension(BIN_EXT)
+                        }
+                    };
+                    let (fixed, warn) = ensure_output_ext(chosen, BIN_EXT);
+                    if let Some(w) = warn {
+                        eprintln!("Warning: {}", w);
+                    } else if args.output.is_none() {
+                        println!("No output file specified, using default: {}", fixed.to_string_lossy());
                     }
+                    fixed.to_string_lossy().to_string()
                 };
                 
                 // Convert to VM binary format

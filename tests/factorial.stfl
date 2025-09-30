@@ -1,11 +1,11 @@
 # Factorial sample that returns 120 for factorial of 5
 # Uses an inclusive range 1..n and multiplies into an accumulator.
 
-proc main() =
-  let n = 5
-  let acc = 1
+main main() -> int64:
+  var n = 5
+  var acc = 1
 
-  for i in 1 .. n:
+  for i in 1..n:
     acc = acc * i
 
   return acc
