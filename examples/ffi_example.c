@@ -52,10 +52,10 @@ int main() {
     total_tests++;
     if (compile_and_test(
         "Simple Arithmetic",
-        "let x = 42\n"
-        "let y = 10\n"
+        "var x = 42\n"
+        "var y = 10\n"
         "x + y",
-        "arithmetic.stoffel")) {
+        "arithmetic.stfl")) {
         success_count++;
     }
 
@@ -63,11 +63,11 @@ int main() {
     total_tests++;
     if (compile_and_test(
         "Multiple Operations",
-        "let a = 5\n"
-        "let b = 3\n"
-        "let c = 2\n"
+        "var a = 5\n"
+        "var b = 3\n"
+        "var c = 2\n"
         "a * b + c",
-        "complex.stoffel")) {
+        "complex.stfl")) {
         success_count++;
     }
 
@@ -75,10 +75,10 @@ int main() {
     total_tests++;
     if (compile_and_test(
         "Boolean Values",
-        "let is_valid = true\n"
-        "let is_ready = false\n"
+        "var is_valid = true\n"
+        "var is_ready = false\n"
         "is_valid",
-        "boolean.stoffel")) {
+        "boolean.stfl")) {
         success_count++;
     }
 
@@ -86,9 +86,9 @@ int main() {
     total_tests++;
     if (compile_and_test(
         "String Literals",
-        "let greeting = \"Hello, Stoffel!\"\n"
+        "var greeting = \"Hello, Stoffel!\"\n"
         "greeting",
-        "string.stoffel")) {
+        "string.stfl")) {
         success_count++;
     }
 
