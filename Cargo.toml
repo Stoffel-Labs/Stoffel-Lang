@@ -5,6 +5,10 @@ authors = ["Gabriel Arrouye"]
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "stoffellang"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 stoffel-vm-types = { version = "0.1.0", git = "https://github.com/Stoffel-Labs/StoffelVM.git"}
 colored = "3.0.0"
