@@ -138,6 +138,29 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.symbol_table.declare_symbol(info);
             },
             AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
+                // Entry constraints: disallow 'secret main <name>' (keyword 'main' cannot be prefixed by 'secret').
+                // We cannot directly detect the header keyword here, but we enforce that
+                // no function used as entry (pragmas include 'entry') is secret.
+                let is_entry = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
+                if is_entry && *is_secret {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        "Entry function cannot be declared 'secret'",
+                        location.clone(),
+                    ));
+                    return Err(());
+                }
+
+                // Disallow 'secret' main explicitly at semantic level (parser doesn't allow 'secret main' keyword).
+                if let Some(n) = name {
+                    if n == "main" && *is_secret {
+                        self.error_reporter.add_error(CompilerError::semantic_error(
+                            "The 'main' entry function cannot be secret",
+                            location.clone(),
+                        ));
+                        return Err(());
+                    }
+                }
+
                 let func_name = name.as_ref().cloned().unwrap_or_else(|| {
                     // TODO: Handle anonymous functions if needed
                     format!("<anonymous_{}:{}>", location.line, location.column)
@@ -157,7 +180,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let ret_type = return_type
                     .as_ref()
                     .map(|rt| SymbolType::from_ast(rt))
-                    .unwrap_or(SymbolType::Void); // Default return type is Void
+                    .unwrap_or(SymbolType::Void); // Default return type is Void (also for '-> nil')
 
                 // Handle 'secret proc' and secret return type annotation
                 let final_return_type = if ret_type.is_secret() || *is_secret {
@@ -431,7 +454,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let ret_type_annotation = return_type
                     .as_ref()
                     .map(|rt| SymbolType::from_ast(rt))
-                    .unwrap_or(SymbolType::Void);
+                    .unwrap_or(SymbolType::Void); // None or '-> nil' means Void
 
                 // Handle 'secret proc' and secret return type annotation
                 let final_return_type = if ret_type_annotation.is_secret() || is_secret {
@@ -796,6 +819,66 @@ impl<'a> SemanticAnalyzer<'a> {
                     resolved_return_type: Some(return_type.clone()), // Store the resolved type
                 };
                 Ok((reconstructed_node, return_type)) // Type of the call is the function's return type
+            }
+
+            // --- Binary operations (comparisons etc.) ---
+            AstNode::BinaryOperation { op, left, right, location } => {
+                // Analyze both sides first
+                let (checked_left, left_ty) = self.analyze_node(*left)?;
+                let (checked_right, right_ty) = self.analyze_node(*right)?;
+
+                // Helper: are these comparison operators?
+                let is_cmp = matches!(op.as_str(), "==" | "!=" | "<" | "<=" | ">" | ">=");
+
+                if is_cmp {
+                    // Validate operand types: allow integers and float for now
+                    let l_under = left_ty.underlying_type().clone();
+                    let r_under = right_ty.underlying_type().clone();
+                    let is_left_numeric = l_under.is_integer() || l_under == SymbolType::Float;
+                    let is_right_numeric = r_under.is_integer() || r_under == SymbolType::Float;
+
+                    if !(is_left_numeric && is_right_numeric)
+                        && !(matches!(l_under, SymbolType::Unknown) || matches!(r_under, SymbolType::Unknown))
+                    {
+                        // If both are known and not numeric, error out
+                        let err_loc = match (&checked_left, &checked_right) {
+                            (l, _) if !is_left_numeric => l.location(),
+                            (_, r) => r.location(),
+                        };
+                        self.error_reporter.add_error(CompilerError::type_error(
+                            format!("Operands to '{}' must be numeric (ints or float), found '{}' and '{}'",
+                                    op,
+                                    declared_type_to_string(&left_ty),
+                                    declared_type_to_string(&right_ty)),
+                            err_loc,
+                        ).with_hint("Cast or adjust operand types to be comparable"));
+                        return Err(());
+                    }
+
+                    // Result type of comparison:
+                    // - public bool when both operands are public
+                    // - secret bool when any operand is secret
+                    let result_ty = if left_ty.is_secret() || right_ty.is_secret() {
+                        SymbolType::Secret(Box::new(SymbolType::Bool))
+                    } else {
+                        SymbolType::Bool
+                    };
+
+                    return Ok((
+                        AstNode::BinaryOperation {
+                            op,
+                            left: Box::new(checked_left),
+                            right: Box::new(checked_right),
+                            location,
+                        },
+                        result_ty,
+                    ));
+                }
+
+                // For other binary ops we don't handle here; pass through as Unknown type.
+                Ok((AstNode::BinaryOperation {
+                    op, left: Box::new(checked_left), right: Box::new(checked_right), location
+                }, SymbolType::Unknown))
             }
 
             // Fallback for unhandled nodes
