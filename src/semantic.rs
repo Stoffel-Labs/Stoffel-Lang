@@ -359,6 +359,28 @@ impl<'a> SemanticAnalyzer<'a> {
                 let (checked_target, target_type) = self.analyze_node(*target)?;
                 let (checked_value, value_type) = self.analyze_node(*value)?;
 
+                // Check if this is a take_share call being assigned
+                let is_take_share_call = if let AstNode::FunctionCall { function, .. } = &checked_value {
+                    if let AstNode::Identifier(func_name, _) = function.as_ref() {
+                        func_name == "take_share"
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // Special check: take_share can only be assigned to secret variables
+                if is_take_share_call && !target_type.is_secret() {
+                    self.error_reporter.add_error(
+                        CompilerError::semantic_error(
+                            "ClientStore.take_share can only be assigned to secret variables",
+                            location.clone(),
+                        ).with_hint("The target variable must be declared with 'secret' keyword or secret type")
+                    );
+                    return Err(());
+                }
+
                 // Only support simple identifier targets for type checking for now
                 let loc = location.clone();
                 if let AstNode::Identifier(_, _) = checked_target {
@@ -384,13 +406,35 @@ impl<'a> SemanticAnalyzer<'a> {
             AstNode::VariableDeclaration { name, type_annotation, value, is_mutable, is_secret, location } => {
                 // 1. Analyze the value expression first (if it exists)
                 let mut checked_value_node = None;
+                let mut is_take_share_call = false;
                 let value_type = if let Some(val_expr) = value {
                     let (checked_val, val_type) = self.analyze_node(*val_expr)?;
+
+                    // Check if this is a call to take_share
+                    if let AstNode::FunctionCall { function, .. } = &checked_val {
+                        if let AstNode::Identifier(func_name, _) = function.as_ref() {
+                            if func_name == "take_share" {
+                                is_take_share_call = true;
+                            }
+                        }
+                    }
+
                     checked_value_node = Some(Box::new(checked_val));
                     val_type
                 } else {
                     SymbolType::Unknown // No value provided
                 };
+
+                // Special check: take_share can only populate secret variables
+                if is_take_share_call && !is_secret && !type_annotation.as_ref().map_or(false, |t| SymbolType::from_ast(t).is_secret()) {
+                    self.error_reporter.add_error(
+                        CompilerError::semantic_error(
+                            "ClientStore.take_share can only be assigned to secret variables",
+                            location.clone(),
+                        ).with_hint("Add 'secret' keyword to the variable declaration or use 'secret' type annotation")
+                    );
+                    return Err(());
+                }
 
                 // 2. Determine the declared type (from annotation or inferred from value)
                 let declared_type = type_annotation

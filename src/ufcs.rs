@@ -68,6 +68,88 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                 location,
             }
         },
+        // Recursively transform other node types
+        AstNode::VariableDeclaration { name, type_annotation, value, is_mutable, is_secret, location } => {
+            AstNode::VariableDeclaration {
+                name,
+                type_annotation,
+                value: value.map(|v| Box::new(transform_ufcs(*v))),
+                is_mutable,
+                is_secret,
+                location,
+            }
+        },
+        AstNode::Assignment { target, value, location } => {
+            AstNode::Assignment {
+                target: Box::new(transform_ufcs(*target)),
+                value: Box::new(transform_ufcs(*value)),
+                location,
+            }
+        },
+        AstNode::Block(nodes) => {
+            AstNode::Block(nodes.into_iter().map(transform_ufcs).collect())
+        },
+        AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
+            AstNode::FunctionDefinition {
+                name,
+                parameters,
+                return_type,
+                body: Box::new(transform_ufcs(*body)),
+                is_secret,
+                pragmas,
+                location,
+                node_id,
+            }
+        },
+        AstNode::IfExpression { condition, then_branch, else_branch } => {
+            AstNode::IfExpression {
+                condition: Box::new(transform_ufcs(*condition)),
+                then_branch: Box::new(transform_ufcs(*then_branch)),
+                else_branch: else_branch.map(|e| Box::new(transform_ufcs(*e))),
+            }
+        },
+        AstNode::WhileLoop { condition, body, location } => {
+            AstNode::WhileLoop {
+                condition: Box::new(transform_ufcs(*condition)),
+                body: Box::new(transform_ufcs(*body)),
+                location,
+            }
+        },
+        AstNode::ForLoop { variables, iterable, body, location } => {
+            AstNode::ForLoop {
+                variables,
+                iterable: Box::new(transform_ufcs(*iterable)),
+                body: Box::new(transform_ufcs(*body)),
+                location,
+            }
+        },
+        AstNode::Return { value, location } => {
+            AstNode::Return {
+                value: value.map(|v| Box::new(transform_ufcs(*v))),
+                location,
+            }
+        },
+        AstNode::BinaryOperation { op, left, right, location } => {
+            AstNode::BinaryOperation {
+                op,
+                left: Box::new(transform_ufcs(*left)),
+                right: Box::new(transform_ufcs(*right)),
+                location,
+            }
+        },
+        AstNode::UnaryOperation { op, operand, location } => {
+            AstNode::UnaryOperation {
+                op,
+                operand: Box::new(transform_ufcs(*operand)),
+                location,
+            }
+        },
+        AstNode::DiscardStatement { expression, location } => {
+            AstNode::DiscardStatement {
+                expression: Box::new(transform_ufcs(*expression)),
+                location,
+            }
+        },
         _ => node,
     }
 }

@@ -262,6 +262,38 @@ impl SymbolTable {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
         }
 
+        // Add ClientStore global object (as a constant/singleton instance)
+        let client_store_info = SymbolInfo {
+            name: "ClientStore".to_string(),
+            kind: SymbolKind::Variable { is_mutable: false },
+            symbol_type: SymbolType::TypeName("ClientStore".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(client_store_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Add take_share method for ClientStore
+        // take_share(ClientStore, client_idx: int, share_idx: int) -> secret
+        let take_share_info = SymbolInfo {
+            name: "take_share".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![
+                    SymbolType::TypeName("ClientStore".to_string()),
+                    SymbolType::Int64,
+                    SymbolType::Int64,
+                ],
+                return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+            },
+            symbol_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(take_share_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         // Add built-in types (integers, string, bool, float, nil, void)
         for type_name in [
             "int64", "int32", "int16", "int8",

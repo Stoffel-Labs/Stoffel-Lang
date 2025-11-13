@@ -40,6 +40,10 @@ struct CodeGenerator {
 
 impl CodeGenerator {
     fn new() -> Self {
+        let mut known_builtins = HashSet::new();
+        known_builtins.insert("print".to_string());
+        known_builtins.insert("take_share".to_string());
+
         CodeGenerator {
             current_instructions: Vec::new(),
             current_labels: HashMap::new(),
@@ -50,7 +54,7 @@ impl CodeGenerator {
             compiled_functions: HashMap::new(),
             main_proc_chunk: None,
             entry_main_chunk: None,
-            known_builtins: HashSet::new(),
+            known_builtins,
             pragma_handlers: Self::register_pragma_handlers(),
             identified_constants: Vec::new(),
         }
@@ -124,6 +128,15 @@ impl CodeGenerator {
             },
             // --- Identifiers ---
             AstNode::Identifier(name, location) => {
+                // Special case: ClientStore is a global singleton, allocate a placeholder register
+                if name == "ClientStore" {
+                    let vr = self.allocate_virtual_register(false); // ClientStore itself is not secret
+                    // Load a special marker value for ClientStore (we can use Unit or a sentinel)
+                    self.identified_constants.push(Constant::Unit);
+                    self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
+                    return Ok((vr, false));
+                }
+
                 // Semantic analysis already verified this identifier exists.
                 // Look it up to get its register.
                 if let Some(&vr_index) = self.symbol_table.get(name) {
