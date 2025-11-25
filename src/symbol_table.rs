@@ -294,6 +294,22 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
+        // Add get_number_clients method for ClientStore
+        // get_number_clients(ClientStore) -> int64
+        let get_number_clients_info = SymbolInfo {
+            name: "get_number_clients".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::TypeName("ClientStore".to_string())],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(get_number_clients_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         // Add built-in types (integers, string, bool, float, nil, void)
         for type_name in [
             "int64", "int32", "int16", "int8",

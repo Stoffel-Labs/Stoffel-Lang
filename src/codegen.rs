@@ -43,6 +43,7 @@ impl CodeGenerator {
         let mut known_builtins = HashSet::new();
         known_builtins.insert("print".to_string());
         known_builtins.insert("take_share".to_string());
+        known_builtins.insert("get_number_clients".to_string());
 
         CodeGenerator {
             current_instructions: Vec::new(),

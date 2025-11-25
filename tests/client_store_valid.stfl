@@ -25,6 +25,10 @@ main main() -> nil:
   # Valid: call function that uses ClientStore
   var computed: secret int64 = process_shares()
 
+  # Retrieve number of clients (clear value)
+  var client_total: int64 = ClientStore.get_number_clients()
+  client_total = ClientStore.get_number_clients()
+
   # Valid: reassignment to existing secret variable
   secret var mutable_share: int64 = ClientStore.take_share(1, 1)
   mutable_share = ClientStore.take_share(2, 0)
