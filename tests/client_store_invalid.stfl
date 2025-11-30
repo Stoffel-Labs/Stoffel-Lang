@@ -1,0 +1,15 @@
+# Invalid example: trying to assign ClientStore.take_share to non-secret variables
+# This should cause compiler errors
+
+main main() -> nil:
+  # ERROR: Cannot assign take_share result to non-secret variable (no secret keyword)
+  var share1: int64 = ClientStore.take_share(0, 0)
+
+  # ERROR: Cannot assign take_share result to non-secret variable (implicit type)
+  var share2 = ClientStore.take_share(1, 0)
+
+  # ERROR: Cannot reassign take_share result to non-secret variable
+  var regular_var: int64 = 42
+  regular_var = ClientStore.take_share(0, 1)
+
+  print("This should not compile")
