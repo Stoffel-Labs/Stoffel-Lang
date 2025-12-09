@@ -42,8 +42,17 @@ impl CodeGenerator {
     fn new() -> Self {
         let mut known_builtins = HashSet::new();
         known_builtins.insert("print".to_string());
-        known_builtins.insert("take_share".to_string());
-        known_builtins.insert("get_number_clients".to_string());
+        // VM foreign functions for object/array manipulation
+        known_builtins.insert("create_object".to_string());
+        known_builtins.insert("create_array".to_string());
+        known_builtins.insert("get_field".to_string());
+        known_builtins.insert("set_field".to_string());
+        known_builtins.insert("array_push".to_string());
+        known_builtins.insert("array_length".to_string());
+        // ClientStore builtin object methods (qualified names)
+        known_builtins.insert("ClientStore.take_share".to_string());
+        known_builtins.insert("ClientStore.take_share_fixed".to_string());
+        known_builtins.insert("ClientStore.get_number_clients".to_string());
 
         CodeGenerator {
             current_instructions: Vec::new(),
@@ -129,15 +138,6 @@ impl CodeGenerator {
             },
             // --- Identifiers ---
             AstNode::Identifier(name, location) => {
-                // Special case: ClientStore is a global singleton, allocate a placeholder register
-                if name == "ClientStore" {
-                    let vr = self.allocate_virtual_register(false); // ClientStore itself is not secret
-                    // Load a special marker value for ClientStore (we can use Unit or a sentinel)
-                    self.identified_constants.push(Constant::Unit);
-                    self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit));
-                    return Ok((vr, false));
-                }
-
                 // Semantic analysis already verified this identifier exists.
                 // Look it up to get its register.
                 if let Some(&vr_index) = self.symbol_table.get(name) {
@@ -146,6 +146,8 @@ impl CodeGenerator {
                         .expect("Identifier VR missing from secrecy map");
                     Ok((vr, is_secret))
                 } else {
+                    // Builtin objects like ClientStore don't need registers - they're accessed via methods
+                    // Just return a dummy register (this shouldn't be reached for properly transformed code)
                     Err(CompilerError::internal_error(format!(
                         "Codegen failed: Symbol '{}' passed semantic analysis but not found in codegen symbol table", name
                     )))
@@ -299,9 +301,9 @@ impl CodeGenerator {
             },
             // --- Assignment ---
             AstNode::Assignment { target, value, location } => {
-                let (value_vr, value_is_secret) = self.compile_node(value)?;
                 match target.as_ref() {
                     AstNode::Identifier(name, target_loc) => {
+                        let (value_vr, value_is_secret) = self.compile_node(value)?;
                         let dest_vr_index = self.symbol_table.get(name).cloned().ok_or_else(|| CompilerError::internal_error(format!("Assignment target '{}' not found in symbol table", name)))?;
                         // The MOV instruction implicitly handles potential hide/reveal
                         // based on the source and destination register halves.
@@ -316,11 +318,38 @@ impl CodeGenerator {
                         Ok((dest_vr, dest_is_secret))
                     }
                     AstNode::FieldAccess { object, field_name, location: _ } => {
-                        let (object_vr, object_is_secret) = self.compile_node(object)?;
-                        // We don't have a direct SetField instruction in the new set
-                        // This would need custom implementation (e.g., STR instruction)
-                        Ok((object_vr, object_is_secret)) // Return object vr, though it's now free
-                    } // TODO: Implement field assignment
+                        // Compile object and value
+                        let (obj_vr, _obj_is_secret) = self.compile_node(object)?;
+                        let (val_vr, val_is_secret) = self.compile_node(value)?;
+
+                        // Load field name as string constant
+                        let field_const = Constant::String(field_name.clone());
+                        self.identified_constants.push(field_const.clone());
+                        let field_vr = self.allocate_virtual_register(false);
+                        self.emit(Instruction::LDI(field_vr.0, crate::core_types::Value::from(field_const)));
+
+                        // Call set_field(object, field_name, value)
+                        self.emit(Instruction::PUSHARG(obj_vr.0));
+                        self.emit(Instruction::PUSHARG(field_vr.0));
+                        self.emit(Instruction::PUSHARG(val_vr.0));
+                        self.emit(Instruction::CALL("set_field".to_string()));
+
+                        Ok((val_vr, val_is_secret))
+                    }
+                    AstNode::IndexAccess { base, index, location: _ } => {
+                        // Compile base, index, and value
+                        let (base_vr, _base_is_secret) = self.compile_node(base)?;
+                        let (idx_vr, _idx_is_secret) = self.compile_node(index)?;
+                        let (val_vr, val_is_secret) = self.compile_node(value)?;
+
+                        // Call set_field(base, index, value)
+                        self.emit(Instruction::PUSHARG(base_vr.0));
+                        self.emit(Instruction::PUSHARG(idx_vr.0));
+                        self.emit(Instruction::PUSHARG(val_vr.0));
+                        self.emit(Instruction::CALL("set_field".to_string()));
+
+                        Ok((val_vr, val_is_secret))
+                    }
                     _ => Err(CompilerError::semantic_error("Invalid assignment target", location.clone())),
                 }
             },
@@ -446,10 +475,23 @@ impl CodeGenerator {
             },
             AstNode::FieldAccess { object, field_name, location } => {
                 let (object_vr, object_is_secret) = self.compile_node(object)?;
-                // Determine result secrecy based on field type (lookup needed)
-                let result_is_secret = false; // TODO: Lookup field type
+
+                // Load field name as string constant
+                let field_const = Constant::String(field_name.clone());
+                self.identified_constants.push(field_const.clone());
+                let field_vr = self.allocate_virtual_register(false);
+                self.emit(Instruction::LDI(field_vr.0, crate::core_types::Value::from(field_const)));
+
+                // Call get_field(object, field_name)
+                self.emit(Instruction::PUSHARG(object_vr.0));
+                self.emit(Instruction::PUSHARG(field_vr.0));
+                self.emit(Instruction::CALL("get_field".to_string()));
+
+                // TODO: Determine result secrecy based on field type
+                let result_is_secret = false;
                 let result_vr = self.allocate_virtual_register(result_is_secret);
-                // We need to implement field access differently with the new instruction set
+                self.emit(Instruction::MOV(result_vr.0, 0)); // Result is in r0
+
                 Ok((result_vr, result_is_secret))
             },
             AstNode::WhileLoop { condition, body, location } => {
@@ -680,7 +722,64 @@ impl CodeGenerator {
                 // Function definition itself doesn't produce a value in the outer scope.
                 Ok((VirtualRegister(usize::MAX), false)) // Return dummy VR
             },
-            _ => todo!(),
+            AstNode::ListLiteral(elements) => {
+                // Create array with capacity
+                let capacity_const = Constant::I64(elements.len() as i64);
+                self.identified_constants.push(capacity_const.clone());
+                let cap_vr = self.allocate_virtual_register(false);
+                self.emit(Instruction::LDI(cap_vr.0, crate::core_types::Value::from(capacity_const)));
+                self.emit(Instruction::PUSHARG(cap_vr.0));
+                self.emit(Instruction::CALL("create_array".to_string()));
+
+                let array_vr = self.allocate_virtual_register(false);
+                self.emit(Instruction::MOV(array_vr.0, 0)); // Result is in r0
+
+                // Push each element using array_push
+                for elem in elements {
+                    let (elem_vr, _elem_is_secret) = self.compile_node(elem)?;
+                    self.emit(Instruction::PUSHARG(array_vr.0));
+                    self.emit(Instruction::PUSHARG(elem_vr.0));
+                    self.emit(Instruction::CALL("array_push".to_string()));
+                }
+
+                Ok((array_vr, false))
+            },
+            AstNode::DictLiteral(pairs) => {
+                // Create object
+                self.emit(Instruction::CALL("create_object".to_string()));
+
+                let obj_vr = self.allocate_virtual_register(false);
+                self.emit(Instruction::MOV(obj_vr.0, 0)); // Result is in r0
+
+                // Set each key-value pair using set_field
+                for (key, value) in pairs {
+                    let (key_vr, _key_is_secret) = self.compile_node(key)?;
+                    let (val_vr, _val_is_secret) = self.compile_node(value)?;
+
+                    self.emit(Instruction::PUSHARG(obj_vr.0));
+                    self.emit(Instruction::PUSHARG(key_vr.0));
+                    self.emit(Instruction::PUSHARG(val_vr.0));
+                    self.emit(Instruction::CALL("set_field".to_string()));
+                }
+
+                Ok((obj_vr, false))
+            },
+            AstNode::IndexAccess { base, index, location } => {
+                let (base_vr, base_is_secret) = self.compile_node(base)?;
+                let (index_vr, index_is_secret) = self.compile_node(index)?;
+
+                // Call get_field(base, index)
+                self.emit(Instruction::PUSHARG(base_vr.0));
+                self.emit(Instruction::PUSHARG(index_vr.0));
+                self.emit(Instruction::CALL("get_field".to_string()));
+
+                let result_is_secret = base_is_secret || index_is_secret;
+                let result_vr = self.allocate_virtual_register(result_is_secret);
+                self.emit(Instruction::MOV(result_vr.0, 0)); // Result is in r0
+
+                Ok((result_vr, result_is_secret))
+            },
+            _ => Err(CompilerError::internal_error(format!("Codegen not implemented for AST node: {:?}", node))),
         }
     }
 

@@ -293,6 +293,21 @@ impl<'a> SemanticAnalyzer<'a> {
              AstNode::FieldAccess { object, .. } => {
                  self.populate_symbols(object)?;
              }
+             AstNode::IndexAccess { base, index, .. } => {
+                 self.populate_symbols(base)?;
+                 self.populate_symbols(index)?;
+             }
+             AstNode::ListLiteral(elements) => {
+                 for elem in elements {
+                     self.populate_symbols(elem)?;
+                 }
+             }
+             AstNode::DictLiteral(pairs) => {
+                 for (key, value) in pairs {
+                     self.populate_symbols(key)?;
+                     self.populate_symbols(value)?;
+                 }
+             }
             // Other nodes that might contain declarations (Types, Imports, etc.)
             // AstNode::TypeAlias { .. } => { /* Declare type name */ }
             // AstNode::ObjectDefinition { .. } => { /* Declare type name, enter scope for fields */ }
@@ -337,6 +352,19 @@ impl<'a> SemanticAnalyzer<'a> {
                 Value::Nil => SymbolType::Nil,
             })), 
             AstNode::Identifier(name, location) => {
+                // First check for qualified builtin method names (e.g., "ClientStore.take_share")
+                // These are valid when used as function identifiers in FunctionCall
+                if let Some(dot_pos) = name.find('.') {
+                    let obj_name = &name[..dot_pos];
+                    let method_name = &name[dot_pos + 1..];
+
+                    if let Some(method_info) = self.symbol_table.lookup_builtin_method(obj_name, method_name) {
+                        // Return the method's return type (the identifier is valid as a callable)
+                        return Ok((AstNode::Identifier(name.clone(), location.clone()), method_info.return_type.clone()));
+                    }
+                }
+
+                // Regular symbol lookup
                 if let Some(info) = self.symbol_table.lookup_symbol(name.as_str()) {
                     // TODO: Mark symbol as used (for warnings)
                     // Return the type stored in the symbol table
@@ -726,7 +754,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
             AstNode::FunctionCall { function, arguments, location, resolved_return_type: _ } => { // Ignore existing resolved_return_type
                 // 1. Analyze the function expression itself (usually an identifier)
-                let (checked_function_node, function_expr_type) = self.analyze_node(*function)?;
+                let (checked_function_node, _function_expr_type) = self.analyze_node(*function)?;
 
                 // 2. Analyze arguments
                 let mut checked_arguments = Vec::with_capacity(arguments.len());
@@ -738,10 +766,36 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
 
                 // 3. Determine the actual function symbol and its type
-                let (function_name, function_info) = match &checked_function_node {
+                let (function_name, expected_param_types, return_type) = match &checked_function_node {
                     AstNode::Identifier(name, loc) => {
-                        if let Some(info) = self.symbol_table.lookup_symbol(name) {
-                            (name.clone(), info.clone()) // Clone info for use
+                        // Check if this is a qualified builtin object method call (e.g., "ClientStore.take_share")
+                        if let Some(dot_pos) = name.find('.') {
+                            let obj_name = &name[..dot_pos];
+                            let method_name = &name[dot_pos + 1..];
+
+                            if let Some(method_info) = self.symbol_table.lookup_builtin_method(obj_name, method_name) {
+                                (name.clone(), method_info.parameters.clone(), method_info.return_type.clone())
+                            } else {
+                                self.error_reporter.add_error(CompilerError::semantic_error(
+                                    format!("Unknown method '{}' on builtin object '{}'", method_name, obj_name),
+                                    loc.clone(),
+                                ));
+                                return Err(());
+                            }
+                        } else if let Some(info) = self.symbol_table.lookup_symbol(name) {
+                            // Regular function lookup
+                            match &info.kind {
+                                SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
+                                    (name.clone(), parameters.clone(), return_type.clone())
+                                }
+                                _ => {
+                                    self.error_reporter.add_error(CompilerError::type_error(
+                                        format!("'{}' is not a function", name),
+                                        loc.clone(),
+                                    ));
+                                    return Err(());
+                                }
+                            }
                         } else {
                             self.error_reporter.add_error(CompilerError::semantic_error(
                                 format!("Use of undeclared function '{}'", name),
@@ -760,22 +814,15 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 };
 
-                // 4. Check if the symbol is actually a function and validate arguments
-                let (expected_param_types, return_type) = match &function_info.kind {
-                    SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
-                        // TODO: Implement proper argument count and type checking
-                        // if parameters.len() != argument_types.len() { ... error ... }
-                        // for (expected, actual) in parameters.iter().zip(argument_types.iter()) { ... check type ... }
-                        (parameters.clone(), return_type.clone())
-                    }
-                    _ => {
-                        self.error_reporter.add_error(CompilerError::type_error(
-                            format!("'{}' is not a function", function_name),
-                            checked_function_node.location(),
-                        ));
-                        return Err(());
-                    }
-                };
+                // 4. Validate argument count
+                if expected_param_types.len() != argument_types.len() {
+                    self.error_reporter.add_error(CompilerError::semantic_error(
+                        format!("Function '{}' expects {} arguments, but {} were provided",
+                            function_name, expected_param_types.len(), argument_types.len()),
+                        location.clone(),
+                    ));
+                    return Err(());
+                }
 
                 // 5. Validate arguments using integer compatibility rules
                 for (idx, (expected_ty, actual_ty)) in expected_param_types.iter().zip(argument_types.iter()).enumerate() {
@@ -925,6 +972,104 @@ impl<'a> SemanticAnalyzer<'a> {
                 }, SymbolType::Unknown))
             }
 
+            // --- Collection Literals and Access ---
+            AstNode::ListLiteral(elements) => {
+                let mut checked_elements = Vec::with_capacity(elements.len());
+                let mut element_type = SymbolType::Unknown;
+
+                for elem in elements {
+                    let (checked_elem, elem_ty) = self.analyze_node(elem)?;
+                    // Infer element type from first element, check consistency
+                    if matches!(element_type, SymbolType::Unknown) {
+                        element_type = elem_ty.clone();
+                    }
+                    // TODO: Add type consistency checking between elements
+                    checked_elements.push(checked_elem);
+                }
+
+                Ok((
+                    AstNode::ListLiteral(checked_elements),
+                    SymbolType::List(Box::new(element_type)),
+                ))
+            }
+
+            AstNode::DictLiteral(pairs) => {
+                let mut checked_pairs = Vec::with_capacity(pairs.len());
+                let mut key_type = SymbolType::Unknown;
+                let mut value_type = SymbolType::Unknown;
+
+                for (key, value) in pairs {
+                    let (checked_key, key_ty) = self.analyze_node(key)?;
+                    let (checked_value, val_ty) = self.analyze_node(value)?;
+                    // Infer types from first pair
+                    if matches!(key_type, SymbolType::Unknown) {
+                        key_type = key_ty.clone();
+                    }
+                    if matches!(value_type, SymbolType::Unknown) {
+                        value_type = val_ty.clone();
+                    }
+                    // TODO: Add type consistency checking between pairs
+                    checked_pairs.push((checked_key, checked_value));
+                }
+
+                Ok((
+                    AstNode::DictLiteral(checked_pairs),
+                    SymbolType::Dict(Box::new(key_type), Box::new(value_type)),
+                ))
+            }
+
+            AstNode::IndexAccess { base, index, location } => {
+                let (checked_base, base_type) = self.analyze_node(*base)?;
+                let (checked_index, index_type) = self.analyze_node(*index)?;
+
+                // Determine element type based on base type
+                let element_type = match base_type.underlying_type() {
+                    SymbolType::List(elem) => elem.as_ref().clone(),
+                    SymbolType::String => SymbolType::String, // String indexing returns string (single char)
+                    SymbolType::Dict(_, val) => val.as_ref().clone(),
+                    _ => SymbolType::Unknown, // Allow dynamic access for unknown types
+                };
+
+                // TODO: Verify index type is appropriate (integer for lists, key type for dicts)
+
+                Ok((
+                    AstNode::IndexAccess {
+                        base: Box::new(checked_base),
+                        index: Box::new(checked_index),
+                        location,
+                    },
+                    element_type,
+                ))
+            }
+
+            AstNode::FieldAccess { object, field_name, location } => {
+                let (checked_object, object_type) = self.analyze_node(*object)?;
+
+                // For now, allow field access on any type and return Unknown
+                // TODO: Implement proper object type field lookup for typed objects
+                let field_type = SymbolType::Unknown;
+
+                Ok((
+                    AstNode::FieldAccess {
+                        object: Box::new(checked_object),
+                        field_name,
+                        location,
+                    },
+                    field_type,
+                ))
+            }
+
+            AstNode::DiscardStatement { expression, location } => {
+                let (checked_expr, _expr_type) = self.analyze_node(*expression)?;
+                Ok((
+                    AstNode::DiscardStatement {
+                        expression: Box::new(checked_expr),
+                        location,
+                    },
+                    SymbolType::Void,
+                ))
+            }
+
             // Fallback for unhandled nodes
             _ => {
                 // For now, just return the node as is with Unknown type.
@@ -959,6 +1104,10 @@ fn declared_type_to_string(sym_type: &SymbolType) -> String {
         SymbolType::Secret(inner) => format!("secret {}", declared_type_to_string(inner)),
         SymbolType::TypeName(name) => name.clone(),
         SymbolType::Unknown => "<unknown>".to_string(),
+        // Collection types
+        SymbolType::List(elem) => format!("list[{}]", declared_type_to_string(elem)),
+        SymbolType::Dict(key, val) => format!("dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
+        SymbolType::Object(name) => name.clone(),
     }
 }
 

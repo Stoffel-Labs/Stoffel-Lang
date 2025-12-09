@@ -10,11 +10,32 @@ pub enum SymbolKind {
     Type,
     BuiltinFunction { parameters: Vec<SymbolType>, return_type: SymbolType },
     Module,
+    /// A builtin object type (like ClientStore) - the name refers to the BuiltinObjectInfo
+    BuiltinObject { object_type_name: String },
     // Add more kinds as needed (e.g., EnumMember, Field)
 }
 
+/// Information about a method on a builtin object
+#[derive(Debug, Clone)]
+pub struct ObjectMethodInfo {
+    /// Parameters for the method (excludes the implicit receiver/self)
+    pub parameters: Vec<SymbolType>,
+    /// Return type of the method
+    pub return_type: SymbolType,
+    /// The qualified name used in bytecode (e.g., "ClientStore.take_share")
+    pub qualified_name: String,
+}
+
+/// Information about a builtin object type (like ClientStore)
+#[derive(Debug, Clone)]
+pub struct BuiltinObjectInfo {
+    /// The name of the object type
+    pub name: String,
+    /// Methods available on this object type
+    pub methods: HashMap<String, ObjectMethodInfo>,
+}
+
 /// Represents the type of a symbol (primitive or user-defined)
-/// TODO: This needs to be more sophisticated to handle generics, objects, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolType {
     // Signed integers
@@ -35,7 +56,10 @@ pub enum SymbolType {
     Secret(Box<SymbolType>),
     TypeName(String), // For user-defined types
     Unknown, // Placeholder during analysis
-    // Add complex types: Array, Tuple, Object, FunctionSignature, etc.
+    // Collection types
+    List(Box<SymbolType>),                    // list[T]
+    Dict(Box<SymbolType>, Box<SymbolType>),   // dict[K, V]
+    Object(String),                            // Named object type
 }
 
 impl SymbolType {
@@ -111,6 +135,26 @@ impl SymbolType {
         }
     }
 
+    /// Gets the element type for list types.
+    pub fn element_type(&self) -> Option<&SymbolType> {
+        match self.underlying_type() {
+            SymbolType::List(elem) => Some(elem),
+            _ => None,
+        }
+    }
+
+    /// Checks if the type is indexable (list, string, dict).
+    pub fn is_indexable(&self) -> bool {
+        matches!(self.underlying_type(),
+            SymbolType::List(_) | SymbolType::String | SymbolType::Dict(_, _))
+    }
+
+    /// Checks if the type is a collection (list or dict).
+    pub fn is_collection(&self) -> bool {
+        matches!(self.underlying_type(),
+            SymbolType::List(_) | SymbolType::Dict(_, _))
+    }
+
     /// Returns true if converting any value of `self` to `target` is safe (implicit widening).
     /// Conservative: allows signed->signed widening, unsigned->unsigned widening,
     /// and unsigned->signed only if target bit width > source bit width.
@@ -134,7 +178,7 @@ impl SymbolType {
         match node {
             AstNode::Identifier(name, _) => match name.as_str() {
                 // Signed ints (aliases)
-                "i64" | "int64" => SymbolType::Int64,
+                "i64" | "int64" | "int" => SymbolType::Int64,
                 "i32" | "int32" => SymbolType::Int32,
                 "i16" | "int16" => SymbolType::Int16,
                 "i8"  | "int8"  => SymbolType::Int8,
@@ -154,7 +198,15 @@ impl SymbolType {
             AstNode::SecretType(inner_node) => {
                 SymbolType::Secret(Box::new(SymbolType::from_ast(inner_node)))
             }
-            // TODO: Handle ListType, TupleType, FunctionType, etc.
+            AstNode::ListType(element_type) => {
+                SymbolType::List(Box::new(SymbolType::from_ast(element_type)))
+            }
+            AstNode::DictType { key_type, value_type, .. } => {
+                SymbolType::Dict(
+                    Box::new(SymbolType::from_ast(key_type)),
+                    Box::new(SymbolType::from_ast(value_type))
+                )
+            }
             _ => SymbolType::Unknown, // Cannot determine type from this node
         }
     }
@@ -227,6 +279,8 @@ pub struct SymbolTable {
     current_scope_id: usize,    // ID of the currently active scope
     next_scope_id: usize,       // Counter for assigning unique scope IDs
     pub errors: Vec<(SymbolDeclarationError, SourceLocation)>, // Store error and location of the failed declaration
+    /// Registry of builtin object types (like ClientStore)
+    pub builtin_objects: HashMap<String, BuiltinObjectInfo>,
 }
 
 impl SymbolTable {
@@ -236,11 +290,23 @@ impl SymbolTable {
             current_scope_id: 0,
             next_scope_id: 1, // 0 is global scope
             errors: Vec::new(),
+            builtin_objects: HashMap::new(),
         };
         // Create the global scope (ID 0)
         table.scopes.push(Scope::new(0, None));
         table.add_builtins();
         table
+    }
+
+    /// Looks up a builtin object type by name
+    pub fn lookup_builtin_object(&self, name: &str) -> Option<&BuiltinObjectInfo> {
+        self.builtin_objects.get(name)
+    }
+
+    /// Looks up a method on a builtin object type
+    pub fn lookup_builtin_method(&self, object_name: &str, method_name: &str) -> Option<&ObjectMethodInfo> {
+        self.builtin_objects.get(object_name)
+            .and_then(|obj| obj.methods.get(method_name))
     }
 
     /// Adds built-in functions and types to the global scope.
@@ -262,51 +328,39 @@ impl SymbolTable {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
         }
 
-        // Add ClientStore global object (as a constant/singleton instance)
+        // Add ClientStore as a builtin object with methods
+        let mut client_store_methods = HashMap::new();
+        client_store_methods.insert("take_share".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+            qualified_name: "ClientStore.take_share".to_string(),
+        });
+        client_store_methods.insert("take_share_fixed".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Secret(Box::new(SymbolType::Float)),
+            qualified_name: "ClientStore.take_share_fixed".to_string(),
+        });
+        client_store_methods.insert("get_number_clients".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "ClientStore.get_number_clients".to_string(),
+        });
+
+        // Register the builtin object
+        self.builtin_objects.insert("ClientStore".to_string(), BuiltinObjectInfo {
+            name: "ClientStore".to_string(),
+            methods: client_store_methods,
+        });
+
+        // Add ClientStore as a global symbol (singleton instance)
         let client_store_info = SymbolInfo {
             name: "ClientStore".to_string(),
-            kind: SymbolKind::Variable { is_mutable: false },
-            symbol_type: SymbolType::TypeName("ClientStore".to_string()),
+            kind: SymbolKind::BuiltinObject { object_type_name: "ClientStore".to_string() },
+            symbol_type: SymbolType::Object("ClientStore".to_string()),
             is_secret: false,
             defined_at: SourceLocation::default(),
         };
         if let Err(e) = global_scope.declare(client_store_info) {
-            self.errors.push((e, SourceLocation::default()));
-        }
-
-        // Add take_share method for ClientStore
-        // take_share(ClientStore, client_idx: int, share_idx: int) -> secret
-        let take_share_info = SymbolInfo {
-            name: "take_share".to_string(),
-            kind: SymbolKind::BuiltinFunction {
-                parameters: vec![
-                    SymbolType::TypeName("ClientStore".to_string()),
-                    SymbolType::Int64,
-                    SymbolType::Int64,
-                ],
-                return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
-            },
-            symbol_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
-            is_secret: false,
-            defined_at: SourceLocation::default(),
-        };
-        if let Err(e) = global_scope.declare(take_share_info) {
-            self.errors.push((e, SourceLocation::default()));
-        }
-
-        // Add get_number_clients method for ClientStore
-        // get_number_clients(ClientStore) -> int64
-        let get_number_clients_info = SymbolInfo {
-            name: "get_number_clients".to_string(),
-            kind: SymbolKind::BuiltinFunction {
-                parameters: vec![SymbolType::TypeName("ClientStore".to_string())],
-                return_type: SymbolType::Int64,
-            },
-            symbol_type: SymbolType::Int64,
-            is_secret: false,
-            defined_at: SourceLocation::default(),
-        };
-        if let Err(e) = global_scope.declare(get_number_clients_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
@@ -326,6 +380,91 @@ impl SymbolTable {
              if let Err(e) = global_scope.declare(type_info) {
                  self.errors.push((e, SourceLocation::default()));
              }
+        }
+
+        // Array/Object manipulation builtins (from VM foreign functions)
+        let create_array_info = SymbolInfo {
+            name: "create_array".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![], // Optional capacity parameter
+                return_type: SymbolType::List(Box::new(SymbolType::Unknown)),
+            },
+            symbol_type: SymbolType::List(Box::new(SymbolType::Unknown)),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(create_array_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let create_object_info = SymbolInfo {
+            name: "create_object".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![],
+                return_type: SymbolType::Object("Object".to_string()),
+            },
+            symbol_type: SymbolType::Object("Object".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(create_object_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let get_field_info = SymbolInfo {
+            name: "get_field".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Unknown, SymbolType::Unknown],
+                return_type: SymbolType::Unknown,
+            },
+            symbol_type: SymbolType::Unknown,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(get_field_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let set_field_info = SymbolInfo {
+            name: "set_field".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Unknown, SymbolType::Unknown, SymbolType::Unknown],
+                return_type: SymbolType::Void,
+            },
+            symbol_type: SymbolType::Void,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(set_field_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let array_push_info = SymbolInfo {
+            name: "array_push".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(array_push_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let array_length_info = SymbolInfo {
+            name: "array_length".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(array_length_info) {
+            self.errors.push((e, SourceLocation::default()));
         }
 
         // Add more built-ins: len, assert, etc.

@@ -601,6 +601,8 @@ impl<'a> Parser<'a> {
             },
             // Function call '(' has high precedence
             Some(TokenInfo { kind: TokenKind::LParen, .. }) => 7, // Higher than multiplication/division
+            // Index access '[' has same precedence as field access
+            Some(TokenInfo { kind: TokenKind::LBracket, .. }) => 8, // Same as field access
             // Field access '.' has even higher precedence
             Some(TokenInfo { kind: TokenKind::Dot, .. }) => 8, // Higher than function calls
             _ => 0, // Not an operator
@@ -625,6 +627,39 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expression_with_precedence(0)?; // Parse expression inside parentheses
                 self.consume(&TokenKind::RParen, "Expected ')' after parenthesized expression")?;
                 Ok(expr)
+            }
+            TokenKind::LBracket => {
+                // List literal: [elem1, elem2, ...]
+                let mut elements = Vec::new();
+                if !self.check(&TokenKind::RBracket) {
+                    loop {
+                        elements.push(self.parse_expression()?);
+                        if self.check(&TokenKind::RBracket) {
+                            break;
+                        }
+                        self.consume(&TokenKind::Comma, "Expected ',' or ']' after list element")?;
+                    }
+                }
+                self.consume(&TokenKind::RBracket, "Expected ']' after list elements")?;
+                Ok(AstNode::ListLiteral(elements))
+            }
+            TokenKind::LBrace => {
+                // Dict literal: {key1: val1, key2: val2, ...}
+                let mut pairs = Vec::new();
+                if !self.check(&TokenKind::RBrace) {
+                    loop {
+                        let key = self.parse_expression()?;
+                        self.consume(&TokenKind::Colon, "Expected ':' between dict key and value")?;
+                        let value = self.parse_expression()?;
+                        pairs.push((key, value));
+                        if self.check(&TokenKind::RBrace) {
+                            break;
+                        }
+                        self.consume(&TokenKind::Comma, "Expected ',' or '}' after dict entry")?;
+                    }
+                }
+                self.consume(&TokenKind::RBrace, "Expected '}' after dict entries")?;
+                Ok(AstNode::DictLiteral(pairs))
             }
             TokenKind::Operator(op) => {
                 // Handle prefix operators (e.g., '-', 'not')
@@ -704,8 +739,20 @@ impl<'a> Parser<'a> {
                     location: operator_location, // Location of '.'
                 })
             }
+            TokenKind::LBracket => {
+                // This is index access: left[index]
+                self.advance(); // Consume '['
+                let index = self.parse_expression()?;
+                self.consume(&TokenKind::RBracket, "Expected ']' after index")?;
+
+                Ok(AstNode::IndexAccess {
+                    base: Box::new(left),
+                    index: Box::new(index),
+                    location: operator_location, // Location of '['
+                })
+            }
             _ => Err(CompilerError::syntax_error(
-                format!("Expected infix operator, function call '(', or field access '.', found {:?}", token_info.kind),
+                format!("Expected infix operator, function call '(', field access '.', or index access '[', found {:?}", token_info.kind),
                 token_info.location.clone())),
         }
     }
@@ -770,26 +817,59 @@ impl<'a> Parser<'a> {
          }
 
          // Now parse the actual type
-         match &self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Identifier(name), .. }) => { // TODO: Handle generics like list[int]
+         let base_type = match &self.current_token_info {
+            Some(TokenInfo { kind: TokenKind::Identifier(name), .. }) => {
                 let base_name = name.clone();
                 self.advance(); // Consume identifier
-                // TODO: Handle qualified names like module.Type
-                if is_secret {
-                    Ok(AstNode::SecretType(Box::new(AstNode::Identifier(base_name, type_location))))
+
+                // Check for generic type parameters: list[int], dict[string, int]
+                if self.check(&TokenKind::LBracket) {
+                    self.advance(); // Consume '['
+
+                    match base_name.as_str() {
+                        "list" => {
+                            let element_type = self.parse_type_annotation()?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after list element type")?;
+                            AstNode::ListType(Box::new(element_type))
+                        }
+                        "dict" => {
+                            let key_type = self.parse_type_annotation()?;
+                            self.consume(&TokenKind::Comma, "Expected ',' between dict key and value types")?;
+                            let value_type = self.parse_type_annotation()?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after dict value type")?;
+                            AstNode::DictType {
+                                key_type: Box::new(key_type),
+                                value_type: Box::new(value_type),
+                                location: type_location.clone(),
+                            }
+                        }
+                        _ => {
+                            return Err(CompilerError::syntax_error(
+                                format!("Unknown generic type: {}", base_name),
+                                type_location,
+                            ).with_hint("Supported generic types are: list[T], dict[K, V]"));
+                        }
+                    }
                 } else {
-                    Ok(AstNode::Identifier(base_name, type_location))
+                    // Simple type identifier
+                    AstNode::Identifier(base_name, type_location.clone())
                 }
             }
-            // TODO: Add cases for ListType, TupleType, DictType, FunctionType literals
             _ => {
                 let (found_str, location) = match self.current_token_info {
                     Some(token) => (format!("{:?}", token), token.location.clone()),
                     None => ("end of file".to_string(), self.last_location.clone()),
                 };
 
-                Err(CompilerError::syntax_error(format!("Expected type name identifier after 'secret' (if present), found {}", found_str), location))
+                return Err(CompilerError::syntax_error(format!("Expected type name identifier after 'secret' (if present), found {}", found_str), location));
             }
+        };
+
+        // Wrap in SecretType if needed
+        if is_secret {
+            Ok(AstNode::SecretType(Box::new(base_type)))
+        } else {
+            Ok(base_type)
         }
     }
 
