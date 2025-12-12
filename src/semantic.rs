@@ -26,6 +26,33 @@ impl<'a> SemanticAnalyzer<'a> {
         } else { None }
     }
 
+    /// Checks if two types are compatible, allowing Unknown to match any type.
+    /// This enables type refinement where a concrete type annotation can refine
+    /// an Unknown type from inference (e.g., `list[float]` refines `list[<unknown>]`).
+    fn types_compatible(src: &SymbolType, dst: &SymbolType) -> bool {
+        // Unknown is compatible with anything
+        if *src == SymbolType::Unknown || *dst == SymbolType::Unknown {
+            return true;
+        }
+
+        match (src.underlying_type(), dst.underlying_type()) {
+            // List types: compatible if element types are compatible
+            (SymbolType::List(src_elem), SymbolType::List(dst_elem)) => {
+                Self::types_compatible(src_elem, dst_elem)
+            }
+            // Dict types: compatible if both key and value types are compatible
+            (SymbolType::Dict(src_k, src_v), SymbolType::Dict(dst_k, dst_v)) => {
+                Self::types_compatible(src_k, dst_k) && Self::types_compatible(src_v, dst_v)
+            }
+            // Secret types: compare underlying types
+            (SymbolType::Secret(src_inner), SymbolType::Secret(dst_inner)) => {
+                Self::types_compatible(src_inner, dst_inner)
+            }
+            // For all other types, require exact match
+            (s, d) => s == d,
+        }
+    }
+
     fn check_integer_compat(&mut self, src_node: Option<&AstNode>, src_type: &SymbolType, dst_type: &SymbolType, location: crate::errors::SourceLocation) -> Result<(), ()> {
         // Only enforce special rules if destination is integer
         if dst_type.is_integer() {
@@ -57,8 +84,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 return Err(());
             }
         }
-        // Fallback: require underlying types to match
-        if src_type.underlying_type() != dst_type.underlying_type() && *dst_type != SymbolType::Unknown && *src_type != SymbolType::Unknown {
+        // Fallback: check type compatibility (handles Unknown in collections)
+        if !Self::types_compatible(src_type, dst_type) {
             self.error_reporter.add_error(CompilerError::type_error(
                 format!("Type mismatch. Expected '{}', found '{}'", declared_type_to_string(dst_type), declared_type_to_string(src_type)),
                 location,

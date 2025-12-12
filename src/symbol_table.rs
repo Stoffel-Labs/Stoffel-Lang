@@ -364,6 +364,274 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
+        // =====================================================================
+        // Share - Secret share operations (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut share_methods = HashMap::new();
+
+        // Share.from_clear(value) -> Object (share object)
+        share_methods.insert("from_clear".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64], // Also accepts Float, Bool at runtime
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear".to_string(),
+        });
+
+        // Share.from_clear_int(value, bit_length) -> Object
+        share_methods.insert("from_clear_int".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear_int".to_string(),
+        });
+
+        // Share.from_clear_fixed(value, total_bits, frac_bits) -> Object
+        share_methods.insert("from_clear_fixed".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Float, SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear_fixed".to_string(),
+        });
+
+        // Share.add(share1, share2) -> Object (local operation)
+        share_methods.insert("add".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.add".to_string(),
+        });
+
+        // Share.sub(share1, share2) -> Object (local operation)
+        share_methods.insert("sub".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.sub".to_string(),
+        });
+
+        // Share.neg(share) -> Object (local operation)
+        share_methods.insert("neg".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.neg".to_string(),
+        });
+
+        // Share.add_scalar(share, scalar) -> Object (local operation)
+        share_methods.insert("add_scalar".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.add_scalar".to_string(),
+        });
+
+        // Share.mul_scalar(share, scalar) -> Object (local operation)
+        share_methods.insert("mul_scalar".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.mul_scalar".to_string(),
+        });
+
+        // Share.mul(share1, share2) -> Object (network operation)
+        share_methods.insert("mul".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.mul".to_string(),
+        });
+
+        // Share.open(share) -> int64/float (network operation)
+        share_methods.insert("open".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Int64, // Can also return Float depending on share type
+            qualified_name: "Share.open".to_string(),
+        });
+
+        // Share.send_to_client(share, client_id) -> bool
+        share_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Share.send_to_client".to_string(),
+        });
+
+        // Share.interpolate_local(shares_array) -> int64/float
+        share_methods.insert("interpolate_local".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
+            return_type: SymbolType::Int64,
+            qualified_name: "Share.interpolate_local".to_string(),
+        });
+
+        // Share.get_type(share) -> string
+        share_methods.insert("get_type".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::String,
+            qualified_name: "Share.get_type".to_string(),
+        });
+
+        // Share.get_party_id(share) -> int64
+        share_methods.insert("get_party_id".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Int64,
+            qualified_name: "Share.get_party_id".to_string(),
+        });
+
+        self.builtin_objects.insert("Share".to_string(), BuiltinObjectInfo {
+            name: "Share".to_string(),
+            methods: share_methods,
+        });
+
+        let share_info = SymbolInfo {
+            name: "Share".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Share".to_string() },
+            symbol_type: SymbolType::Object("Share".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(share_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Mpc - MPC engine info (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut mpc_methods = HashMap::new();
+
+        // Mpc.party_id() -> int64
+        mpc_methods.insert("party_id".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.party_id".to_string(),
+        });
+
+        // Mpc.n_parties() -> int64
+        mpc_methods.insert("n_parties".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.n_parties".to_string(),
+        });
+
+        // Mpc.threshold() -> int64
+        mpc_methods.insert("threshold".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.threshold".to_string(),
+        });
+
+        // Mpc.is_ready() -> bool
+        mpc_methods.insert("is_ready".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Bool,
+            qualified_name: "Mpc.is_ready".to_string(),
+        });
+
+        // Mpc.instance_id() -> int64
+        mpc_methods.insert("instance_id".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.instance_id".to_string(),
+        });
+
+        self.builtin_objects.insert("Mpc".to_string(), BuiltinObjectInfo {
+            name: "Mpc".to_string(),
+            methods: mpc_methods,
+        });
+
+        let mpc_info = SymbolInfo {
+            name: "Mpc".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Mpc".to_string() },
+            symbol_type: SymbolType::Object("Mpc".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(mpc_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Rbc - Reliable Broadcast protocol (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut rbc_methods = HashMap::new();
+
+        // Rbc.broadcast(message: string) -> int64 (session_id)
+        rbc_methods.insert("broadcast".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::String],
+            return_type: SymbolType::Int64,
+            qualified_name: "Rbc.broadcast".to_string(),
+        });
+
+        // Rbc.receive(from_party: int64, timeout_ms: int64) -> string
+        rbc_methods.insert("receive".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::String,
+            qualified_name: "Rbc.receive".to_string(),
+        });
+
+        // Rbc.receive_any(timeout_ms: int64) -> Object (with party_id and message fields)
+        rbc_methods.insert("receive_any".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::Object("RbcResult".to_string()),
+            qualified_name: "Rbc.receive_any".to_string(),
+        });
+
+        self.builtin_objects.insert("Rbc".to_string(), BuiltinObjectInfo {
+            name: "Rbc".to_string(),
+            methods: rbc_methods,
+        });
+
+        let rbc_info = SymbolInfo {
+            name: "Rbc".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Rbc".to_string() },
+            symbol_type: SymbolType::Object("Rbc".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(rbc_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Aba - Asynchronous Binary Agreement protocol (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut aba_methods = HashMap::new();
+
+        // Aba.propose(value: bool) -> int64 (session_id)
+        aba_methods.insert("propose".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Bool],
+            return_type: SymbolType::Int64,
+            qualified_name: "Aba.propose".to_string(),
+        });
+
+        // Aba.result(session_id: int64, timeout_ms: int64) -> bool
+        aba_methods.insert("result".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Aba.result".to_string(),
+        });
+
+        // Aba.propose_and_wait(value: bool, timeout_ms: int64) -> bool
+        aba_methods.insert("propose_and_wait".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Bool, SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Aba.propose_and_wait".to_string(),
+        });
+
+        self.builtin_objects.insert("Aba".to_string(), BuiltinObjectInfo {
+            name: "Aba".to_string(),
+            methods: aba_methods,
+        });
+
+        let aba_info = SymbolInfo {
+            name: "Aba".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Aba".to_string() },
+            symbol_type: SymbolType::Object("Aba".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(aba_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         // Add built-in types (integers, string, bool, float, nil, void)
         for type_name in [
             "int64", "int32", "int16", "int8",

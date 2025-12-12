@@ -54,6 +54,39 @@ impl CodeGenerator {
         known_builtins.insert("ClientStore.take_share_fixed".to_string());
         known_builtins.insert("ClientStore.get_number_clients".to_string());
 
+        // Share builtin object methods (matches VM mpc_builtins.rs)
+        known_builtins.insert("Share.from_clear".to_string());
+        known_builtins.insert("Share.from_clear_int".to_string());
+        known_builtins.insert("Share.from_clear_fixed".to_string());
+        known_builtins.insert("Share.add".to_string());
+        known_builtins.insert("Share.sub".to_string());
+        known_builtins.insert("Share.neg".to_string());
+        known_builtins.insert("Share.add_scalar".to_string());
+        known_builtins.insert("Share.mul_scalar".to_string());
+        known_builtins.insert("Share.mul".to_string());
+        known_builtins.insert("Share.open".to_string());
+        known_builtins.insert("Share.send_to_client".to_string());
+        known_builtins.insert("Share.interpolate_local".to_string());
+        known_builtins.insert("Share.get_type".to_string());
+        known_builtins.insert("Share.get_party_id".to_string());
+
+        // Mpc builtin object methods (MPC engine info)
+        known_builtins.insert("Mpc.party_id".to_string());
+        known_builtins.insert("Mpc.n_parties".to_string());
+        known_builtins.insert("Mpc.threshold".to_string());
+        known_builtins.insert("Mpc.is_ready".to_string());
+        known_builtins.insert("Mpc.instance_id".to_string());
+
+        // Rbc builtin object methods (Reliable Broadcast)
+        known_builtins.insert("Rbc.broadcast".to_string());
+        known_builtins.insert("Rbc.receive".to_string());
+        known_builtins.insert("Rbc.receive_any".to_string());
+
+        // Aba builtin object methods (Asynchronous Binary Agreement)
+        known_builtins.insert("Aba.propose".to_string());
+        known_builtins.insert("Aba.result".to_string());
+        known_builtins.insert("Aba.propose_and_wait".to_string());
+
         CodeGenerator {
             current_instructions: Vec::new(),
             current_labels: HashMap::new(),

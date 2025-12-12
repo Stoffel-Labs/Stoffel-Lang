@@ -1,0 +1,68 @@
+# Federated Matrix Average using Fixed-Point Shares
+#
+# This program computes the element-wise AVERAGE of matrix elements across multiple clients
+# using fixed-point secret shares. Each client provides 6 elements (2 rows x 3 cols).
+#
+# For federated learning, we need to average each weight position across all clients:
+# - For each element index i: average[i] = sum(client_j[i] for all j) / num_clients
+#
+# Algorithm:
+# 1. Get number of clients from ClientStore
+# 2. Create result array to store per-element averages
+# 3. For each element position:
+#    a. Sum that element across all clients (using secret shares)
+#    b. Reveal the sum
+#    c. Divide by num_clients to get the average
+#    d. Store in result array
+# 4. Return the array of averaged elements
+
+# Computes element-wise federated average across all clients
+# Returns: an array of per-element averages (as floats, still fixed-point scaled)
+def federated_average_2x3() -> list[float]:
+  # Matrix size: 2x3 = 6 elements per client
+  var matrix_size: int64 = 6
+
+  # Get number of clients
+  var num_clients: int64 = ClientStore.get_number_clients()
+
+  # Create result array to store averaged values
+  var result: list[float] = create_array()
+
+  # Process each element position
+  var elem_idx: int64 = 0
+  while elem_idx < matrix_size:
+    # Initialize accumulator with first client's share for this element
+    secret var element_sum = ClientStore.take_share_fixed(0, elem_idx)
+
+    # Sum this element across remaining clients
+    var client_idx: int64 = 1
+    while client_idx < num_clients:
+      secret var share = ClientStore.take_share_fixed(client_idx, elem_idx)
+      element_sum = element_sum + share
+      client_idx = client_idx + 1
+
+    # Reveal the sum by assigning to a clear variable
+    # MOV from secret register to clear register triggers MPC reveal
+    var revealed_sum: float = element_sum
+
+    # Divide by num_clients to get the average for this element
+    # The result is still fixed-point scaled by 2^16
+    var element_avg: float = revealed_sum / num_clients
+
+    # Store in result array
+    array_push(result, element_avg)
+
+    elem_idx = elem_idx + 1
+
+  return result
+
+# Entry point - returns the array of per-element averages
+main main() -> list[float]:
+  var averages: list[float] = federated_average_2x3()
+
+  # The averages array contains per-element averages:
+  # averages[i] = average of element i across all clients
+  # Values are still fixed-point scaled by 2^16
+  # To get actual float value: averages[i] / 65536.0
+
+  return averages
