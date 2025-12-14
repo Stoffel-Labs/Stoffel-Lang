@@ -3,7 +3,16 @@ use crate::ast::AstNode;
 /// List of builtin object names that have special method call semantics.
 /// For these objects, method calls are emitted as qualified names (e.g., "ClientStore.take_share")
 /// without prepending the object as an argument.
-const BUILTIN_OBJECTS: &[&str] = &["ClientStore"];
+const BUILTIN_OBJECTS: &[&str] = &[
+    "ClientStore",
+    "Share",
+    "Mpc",
+    "Rbc",
+    "Aba",
+    "SecureVoting",
+    "ConsensusValue",
+    "FederatedLearning",
+];
 
 /// Checks if a name is a builtin object that uses qualified method names
 fn is_builtin_object(name: &str) -> bool {
