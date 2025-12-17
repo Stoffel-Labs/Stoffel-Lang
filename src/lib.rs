@@ -18,6 +18,7 @@ pub mod suggestions;
 pub mod ufcs;
 pub mod register_allocator;
 pub mod binary_converter;
+pub mod optimizations;
 
 // Re-export the main compiler functions and types for easy access
 pub use compiler::{compile, CompilerOptions};

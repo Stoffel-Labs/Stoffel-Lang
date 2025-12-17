@@ -14,6 +14,7 @@ mod codegen;
 mod compiler;
 mod lexer;
 mod errors;
+mod optimizations;
 mod parser;
 mod symbol_table;
 mod semantic;
@@ -140,8 +141,8 @@ fn main() {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
     let options = compiler::CompilerOptions {
-        optimize: args.optimize,
-        optimization_level: args.opt_level,
+        optimize: args.optimize || args.opt_level > 0,
+        optimization_level: if args.optimize { 2 } else { args.opt_level },
         print_ir: args.print_ir,
     };
 

@@ -2,6 +2,7 @@ use crate::bytecode::CompiledProgram;
 use crate::codegen;
 use crate::errors::{CompilerError, ErrorReporter};
 use crate::lexer;
+use crate::optimizations;
 use crate::parser;
 use crate::semantic;
 use crate::ufcs;
@@ -94,8 +95,21 @@ pub fn compile(
         println!("-------------------------------------");
     }
 
-    // 5. Code Generation
-    let compiled_program = match codegen::generate_bytecode(&analyzed_ast) {
+    // 5. Optimization Passes
+    let optimized_ast = if options.optimize {
+        let ast = optimizations::optimize_all(analyzed_ast);
+        if options.print_ir {
+            println!("--- Optimized AST (Reveal Batching + Reordering) ---");
+            println!("{:#?}", ast);
+            println!("----------------------------------------------------");
+        }
+        ast
+    } else {
+        analyzed_ast
+    };
+
+    // 6. Code Generation
+    let compiled_program = match codegen::generate_bytecode(&optimized_ast) {
         Ok(program) => program,
         Err(e) => {
             error_reporter.add_error(e);
