@@ -22,6 +22,8 @@ mod suggestions;
 mod ufcs;
 mod register_allocator;
 mod binary_converter;
+mod module_resolver;
+mod multi_file_compiler;
 
 /// Stoffel Language Compiler
 #[derive(ClapParser, Debug)]
@@ -148,7 +150,8 @@ fn main() {
 
     println!("Compiling {}...", filename);
 
-    match compiler::compile(&source, &file_name, &options) {
+    // Use compile_file to automatically handle multi-file projects with imports
+    match compiler::compile_file(file_path, &source, &options) {
         Ok(compiled_program) => {
             println!("Compilation successful!");
 

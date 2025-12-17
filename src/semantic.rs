@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use crate::ast::{AstNode, Pragma, Value};
-use crate::errors::{CompilerError, ErrorReporter};
+use crate::errors::{CompilerError, ErrorReporter, SourceLocation};
 use crate::symbol_table::{SymbolDeclarationError, SymbolInfo, SymbolKind, SymbolTable, SymbolType};
 
 /// Performs semantic analysis (symbol checking, type checking) on the AST.
@@ -8,6 +10,8 @@ pub struct SemanticAnalyzer<'a> {
     error_reporter: &'a mut ErrorReporter,
     current_function_return_type: Option<SymbolType>, // Track expected return type
     filename: &'a str,
+    /// Imported symbols from other modules, keyed by their qualified name
+    imported_symbols: HashMap<String, SymbolInfo>,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -17,6 +21,40 @@ impl<'a> SemanticAnalyzer<'a> {
             error_reporter,
             current_function_return_type: None,
             filename,
+            imported_symbols: HashMap::new(),
+        }
+    }
+
+    /// Creates a new analyzer with pre-populated imported symbols.
+    pub fn with_imports(
+        error_reporter: &'a mut ErrorReporter,
+        filename: &'a str,
+        imported_symbols: HashMap<String, SymbolInfo>,
+    ) -> Self {
+        SemanticAnalyzer {
+            symbol_table: SymbolTable::new(),
+            error_reporter,
+            current_function_return_type: None,
+            filename,
+            imported_symbols,
+        }
+    }
+
+    /// Adds imported symbols to the global scope.
+    fn register_imported_symbols(&mut self) {
+        for (name, info) in &self.imported_symbols {
+            // Add the simple name (without module prefix) for convenience
+            // This allows calling `add(a, b)` instead of `utils.math.add(a, b)`
+            let simple_name = name.rsplit('.').next().unwrap_or(name);
+            self.symbol_table.declare_symbol(SymbolInfo {
+                name: simple_name.to_string(),
+                kind: info.kind.clone(),
+                symbol_type: info.symbol_type.clone(),
+                is_secret: info.is_secret,
+                defined_at: info.defined_at.clone(),
+            });
+            // Also add the qualified name for explicit module.func() calls
+            self.symbol_table.declare_symbol(info.clone());
         }
     }
 
@@ -98,6 +136,9 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Performs semantic analysis (declaration and resolution passes).
     /// Returns the potentially annotated AST or errors.
     pub fn analyze(&mut self, node: AstNode) -> Result<AstNode, ()> {
+        // Register any imported symbols before analysis
+        self.register_imported_symbols();
+
         // Perform the combined analysis traversal
         let (analyzed_node, _node_type) = self.analyze_node(node)?;
         if !self.symbol_table.errors.is_empty() {
@@ -1145,5 +1186,16 @@ pub fn analyze(
     filename: &str,
 ) -> Result<AstNode, ()> {
     let mut analyzer = SemanticAnalyzer::new(error_reporter, filename);
+    analyzer.analyze(ast)
+}
+
+/// Analyzes an AST with pre-imported symbols from other modules.
+pub fn analyze_with_imports(
+    ast: AstNode,
+    error_reporter: &mut ErrorReporter,
+    filename: &str,
+    imported_symbols: HashMap<String, SymbolInfo>,
+) -> Result<AstNode, ()> {
+    let mut analyzer = SemanticAnalyzer::with_imports(error_reporter, filename, imported_symbols);
     analyzer.analyze(ast)
 }

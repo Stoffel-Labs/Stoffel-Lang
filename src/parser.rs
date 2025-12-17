@@ -166,7 +166,8 @@ impl<'a> Parser<'a> {
                 "for" => self.parse_for_loop(),
                 "return" => self.parse_return_statement(),
                 "discard" => self.parse_discard_statement(),
-                // Add other statement keywords (break, continue, yield, import, etc.)
+                "import" => self.parse_import_statement(),
+                // Add other statement keywords (break, continue, yield, etc.)
                 _ => self.parse_expression_statement(), // Assume expression if keyword doesn't start a known statement/decl
             },
             // Friendly hard error for legacy 'proc' at start of a declaration
@@ -580,6 +581,60 @@ impl<'a> Parser<'a> {
 
         Ok(AstNode::DiscardStatement {
             expression: Box::new(expression),
+            location: start_location,
+        })
+    }
+
+    /// Parses an import statement.
+    /// Syntax: import module.submodule [as alias]
+    /// Example: import utils.math
+    /// Example: import utils.math as m
+    fn parse_import_statement(&mut self) -> CompilerResult<AstNode> {
+        let start_location = self.get_location();
+        self.consume_keyword("import", "Expected 'import'")?;
+
+        // Parse module path: identifier.identifier.identifier...
+        let mut module_path = Vec::new();
+        let first_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected module name after 'import'")?;
+        module_path.push(match &first_ident.kind {
+            TokenKind::Identifier(n) => n.clone(),
+            _ => unreachable!(),
+        });
+
+        // Continue parsing dot-separated identifiers
+        while self.check(&TokenKind::Dot) {
+            self.advance(); // consume '.'
+            let next_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected module name after '.'")?;
+            module_path.push(match &next_ident.kind {
+                TokenKind::Identifier(n) => n.clone(),
+                _ => unreachable!(),
+            });
+        }
+
+        // Optional alias: "as <identifier>"
+        let alias = if self.check_keyword("as") {
+            self.advance(); // consume 'as'
+            let alias_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected alias name after 'as'")?;
+            Some(match &alias_token.kind {
+                TokenKind::Identifier(n) => n.clone(),
+                _ => unreachable!(),
+            })
+        } else {
+            None
+        };
+
+        // Expect newline, EOF, or Dedent after import statement
+        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+            return Err(CompilerError::syntax_error(
+                format!("Expected newline after import statement, found {:?}", self.current_token_info),
+                self.get_location(),
+            ));
+        }
+
+        Ok(AstNode::Import {
+            module_path,
+            alias,
+            imported_items: None, // For future "from X import Y" syntax
             location: start_location,
         })
     }

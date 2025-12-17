@@ -828,6 +828,12 @@ impl CodeGenerator {
 
                 Ok((result_vr, result_is_secret))
             },
+            // Import statements are processed at the multi-file compilation level
+            // and don't generate any bytecode themselves
+            AstNode::Import { .. } => {
+                // Imports are a no-op in codegen - they're handled during semantic analysis
+                Ok((VirtualRegister(0), false))
+            },
             _ => Err(CompilerError::internal_error(format!("Codegen not implemented for AST node: {:?}", node))),
         }
     }

@@ -67,9 +67,11 @@ fn get_keywords() -> HashMap<String, TokenKind> {
     keywords.insert("nil".to_string(), TokenKind::NilLiteral);
     keywords.insert("secret".to_string(), TokenKind::Keyword("secret".to_string())); // The special keyword
     keywords.insert("discard".to_string(), TokenKind::Keyword("discard".to_string()));
+    // Import system keywords
+    keywords.insert("import".to_string(), TokenKind::Keyword("import".to_string()));
+    keywords.insert("as".to_string(), TokenKind::Keyword("as".to_string()));
     // Note: 'let' intentionally not added as a keyword anymore. It will be tokenized
     // as an Identifier to allow targeted parse-time diagnostics and potential use as a name.
-    // Add more keywords as needed (e.g., and, or, not, is, as, import, from, export, etc.)
     keywords
 }
 

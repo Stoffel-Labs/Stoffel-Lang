@@ -19,9 +19,11 @@ pub mod ufcs;
 pub mod register_allocator;
 pub mod binary_converter;
 pub mod optimizations;
+pub mod module_resolver;
+pub mod multi_file_compiler;
 
 // Re-export the main compiler functions and types for easy access
-pub use compiler::{compile, CompilerOptions};
+pub use compiler::{compile, compile_file, CompilerOptions};
 pub use errors::{CompilerError, ErrorReporter};
 pub use bytecode::{CompiledProgram, Constant};
 pub use binary_converter::{convert_to_binary, save_to_file};

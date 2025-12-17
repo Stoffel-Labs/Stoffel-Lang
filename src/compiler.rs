@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use crate::bytecode::CompiledProgram;
 use crate::codegen;
 use crate::errors::{CompilerError, ErrorReporter};
 use crate::lexer;
+use crate::multi_file_compiler;
 use crate::optimizations;
 use crate::parser;
 use crate::semantic;
@@ -122,5 +125,39 @@ pub fn compile(
         Err(error_reporter.get_all().into_iter().cloned().collect())
     } else {
         Ok(compiled_program)
+    }
+}
+
+/// Compiles a project from a file path.
+///
+/// This function automatically detects whether the source file contains imports
+/// and uses multi-file compilation if needed. For single-file programs without
+/// imports, it falls back to the standard compilation path.
+///
+/// # Arguments
+///
+/// * `file_path` - Path to the entry source file.
+/// * `source` - The source code of the entry file.
+/// * `options` - Configuration for the compilation process.
+///
+/// # Returns
+///
+/// * `Ok(CompiledProgram)` - If compilation is successful.
+/// * `Err(Vec<CompilerError>)` - If any errors occur during compilation.
+pub fn compile_file(
+    file_path: &Path,
+    source: &str,
+    options: &CompilerOptions,
+) -> Result<CompiledProgram, Vec<CompilerError>> {
+    // Check if the source contains import statements
+    if multi_file_compiler::has_imports(source) {
+        // Use multi-file compilation
+        multi_file_compiler::compile_project(file_path, options)
+    } else {
+        // Use single-file compilation
+        let filename = file_path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown.stfl");
+        compile(source, filename, options)
     }
 }
