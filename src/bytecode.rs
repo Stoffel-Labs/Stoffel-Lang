@@ -1,4 +1,4 @@
-pub(crate) use stoffel_vm_types::core_types::Value;
+pub(crate) use stoffel_vm_types::core_types::{Value, F64};
 pub(crate) use stoffel_vm_types::instructions::Instruction;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -19,8 +19,8 @@ pub enum Constant {
     U32(u32),
     /// 64-bit unsigned integer
     U64(u64),
-    /// Fixed-point floating point number (represented as i64 internally for Eq/Hash)
-    Float(i64),
+    /// 64-bit floating point number (uses F64 wrapper for Eq/Hash)
+    Float(F64),
     /// Boolean value
     Bool(bool),
     /// String value

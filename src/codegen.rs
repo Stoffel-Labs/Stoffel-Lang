@@ -174,7 +174,7 @@ impl CodeGenerator {
                             None => Constant::I64(*value as i64), // default behavior
                         }
                     }
-                    crate::ast::Value::Float(f) => Constant::Float(*f as i64),
+                    crate::ast::Value::Float(f) => Constant::Float(crate::bytecode::F64::new(f64::from_bits(*f))),
                     crate::ast::Value::String(s) => Constant::String(s.clone()),
                     crate::ast::Value::Bool(b) => Constant::Bool(*b),
                     crate::ast::Value::Nil => Constant::Unit,

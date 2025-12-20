@@ -201,7 +201,7 @@ unsafe fn constant_to_c(constant: &Constant) -> CConstant {
         },
         Constant::Float(val) => {
             let mut data = CConstantData { float_val: 0 };
-            data.float_val = *val;
+            data.float_val = f64::from(*val).to_bits() as i64;
             CConstant { const_type: 8, data }
         },
         Constant::Bool(val) => {
