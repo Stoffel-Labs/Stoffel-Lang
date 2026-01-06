@@ -600,3 +600,134 @@ pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerEr
 pub unsafe extern "C" fn stoffel_get_version() -> *const c_char {
     "0.1.0\0".as_ptr() as *const c_char
 }
+
+/// Result structure for binary compilation
+#[repr(C)]
+pub struct CBinaryResult {
+    /// Pointer to the binary data (null if error)
+    pub data: *mut u8,
+    /// Length of the binary data
+    pub len: usize,
+    /// Error message if compilation failed (null if success)
+    pub error: *mut c_char,
+}
+
+/// Compile source code directly to VM-compatible binary format
+///
+/// This function compiles source code and produces a serialized CompiledBinary
+/// that can be loaded directly by the VM using stoffel_load_bytecode.
+///
+/// # Arguments
+///
+/// * `source` - The source code to compile
+/// * `filename` - The filename for error reporting
+/// * `options` - Compiler options (nullable)
+///
+/// # Returns
+///
+/// A CBinaryResult containing either the binary data or an error message
+#[no_mangle]
+pub unsafe extern "C" fn stoffel_compile_to_binary(
+    source: *const c_char,
+    filename: *const c_char,
+    options: *const CCompilerOptions,
+) -> *mut CBinaryResult {
+    if source.is_null() || filename.is_null() {
+        let result = Box::new(CBinaryResult {
+            data: ptr::null_mut(),
+            len: 0,
+            error: string_to_c_char("source and filename cannot be null"),
+        });
+        return Box::into_raw(result);
+    }
+
+    let source_str = match CStr::from_ptr(source).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            let result = Box::new(CBinaryResult {
+                data: ptr::null_mut(),
+                len: 0,
+                error: string_to_c_char("invalid source encoding"),
+            });
+            return Box::into_raw(result);
+        }
+    };
+
+    let filename_str = match CStr::from_ptr(filename).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            let result = Box::new(CBinaryResult {
+                data: ptr::null_mut(),
+                len: 0,
+                error: string_to_c_char("invalid filename encoding"),
+            });
+            return Box::into_raw(result);
+        }
+    };
+
+    let compiler_options = if options.is_null() {
+        CompilerOptions::default()
+    } else {
+        CompilerOptions::from(*options)
+    };
+
+    // Compile the source
+    let program = match compile(source_str, filename_str, &compiler_options) {
+        Ok(p) => p,
+        Err(errors) => {
+            let error_messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+            let error_str = error_messages.join("; ");
+            let result = Box::new(CBinaryResult {
+                data: ptr::null_mut(),
+                len: 0,
+                error: string_to_c_char(&error_str),
+            });
+            return Box::into_raw(result);
+        }
+    };
+
+    // Convert to CompiledBinary using binary_converter
+    let compiled_binary = crate::binary_converter::convert_to_binary(&program);
+
+    // Serialize to bytes
+    let mut buffer = Vec::new();
+    if let Err(e) = compiled_binary.serialize(&mut buffer) {
+        let result = Box::new(CBinaryResult {
+            data: ptr::null_mut(),
+            len: 0,
+            error: string_to_c_char(&format!("serialization failed: {:?}", e)),
+        });
+        return Box::into_raw(result);
+    }
+
+    // Transfer ownership of the buffer to C
+    let len = buffer.len();
+    let data = buffer.as_mut_ptr();
+    std::mem::forget(buffer);
+
+    let result = Box::new(CBinaryResult {
+        data,
+        len,
+        error: ptr::null_mut(),
+    });
+    Box::into_raw(result)
+}
+
+/// Free a binary result
+#[no_mangle]
+pub unsafe extern "C" fn stoffel_free_binary_result(result: *mut CBinaryResult) {
+    if result.is_null() {
+        return;
+    }
+
+    let result = Box::from_raw(result);
+
+    if !result.data.is_null() {
+        // Reconstruct the Vec to properly deallocate
+        Vec::from_raw_parts(result.data, result.len, result.len);
+    }
+
+    if !result.error.is_null() {
+        drop(CString::from_raw(result.error));
+    }
+}
