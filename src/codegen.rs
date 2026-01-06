@@ -90,18 +90,9 @@ impl CodeGenerator {
         // Share.batch_open (was missing)
         known_builtins.insert("Share.batch_open".to_string());
 
-        // SecureVoting builtin object methods
-        known_builtins.insert("SecureVoting.create".to_string());
-        known_builtins.insert("SecureVoting.vote".to_string());
-        known_builtins.insert("SecureVoting.tally".to_string());
-
         // ConsensusValue builtin object methods
         known_builtins.insert("ConsensusValue.propose".to_string());
         known_builtins.insert("ConsensusValue.get".to_string());
-
-        // FederatedLearning builtin object methods
-        known_builtins.insert("FederatedLearning.sum_client_shares".to_string());
-        known_builtins.insert("FederatedLearning.average_client_shares".to_string());
 
         CodeGenerator {
             current_instructions: Vec::new(),

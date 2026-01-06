@@ -640,48 +640,6 @@ impl SymbolTable {
         }
 
         // =====================================================================
-        // SecureVoting - Secure voting protocol (matches VM mpc_builtins.rs)
-        // =====================================================================
-        let mut secure_voting_methods = HashMap::new();
-
-        // SecureVoting.create(num_options: int64) -> Object (voting session)
-        secure_voting_methods.insert("create".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64],
-            return_type: SymbolType::Object("SecureVotingSession".to_string()),
-            qualified_name: "SecureVoting.create".to_string(),
-        });
-
-        // SecureVoting.vote(session, option: int64) -> bool (stubbed in VM)
-        secure_voting_methods.insert("vote".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("SecureVotingSession".to_string()), SymbolType::Int64],
-            return_type: SymbolType::Bool,
-            qualified_name: "SecureVoting.vote".to_string(),
-        });
-
-        // SecureVoting.tally(session) -> list[int64] (stubbed in VM)
-        secure_voting_methods.insert("tally".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("SecureVotingSession".to_string())],
-            return_type: SymbolType::List(Box::new(SymbolType::Int64)),
-            qualified_name: "SecureVoting.tally".to_string(),
-        });
-
-        self.builtin_objects.insert("SecureVoting".to_string(), BuiltinObjectInfo {
-            name: "SecureVoting".to_string(),
-            methods: secure_voting_methods,
-        });
-
-        let secure_voting_info = SymbolInfo {
-            name: "SecureVoting".to_string(),
-            kind: SymbolKind::BuiltinObject { object_type_name: "SecureVoting".to_string() },
-            symbol_type: SymbolType::Object("SecureVoting".to_string()),
-            is_secret: false,
-            defined_at: SourceLocation::default(),
-        };
-        if let Err(e) = global_scope.declare(secure_voting_info) {
-            self.errors.push((e, SourceLocation::default()));
-        }
-
-        // =====================================================================
         // ConsensusValue - Consensus value protocol (matches VM mpc_builtins.rs)
         // =====================================================================
         let mut consensus_value_methods = HashMap::new();
@@ -713,43 +671,6 @@ impl SymbolTable {
             defined_at: SourceLocation::default(),
         };
         if let Err(e) = global_scope.declare(consensus_value_info) {
-            self.errors.push((e, SourceLocation::default()));
-        }
-
-        // =====================================================================
-        // FederatedLearning - Federated learning builtins (matches VM mpc_builtins.rs)
-        // =====================================================================
-        let mut federated_learning_methods = HashMap::new();
-
-        // FederatedLearning.sum_client_shares(num_elements: int64, share_type: string) -> list[int64/float]
-        // Note: share_type can be "fixed" for SecretFixedPoint or omitted/empty for SecretInt
-        federated_learning_methods.insert("sum_client_shares".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64, SymbolType::String],
-            return_type: SymbolType::List(Box::new(SymbolType::Float)), // Returns float for fixed-point
-            qualified_name: "FederatedLearning.sum_client_shares".to_string(),
-        });
-
-        // FederatedLearning.average_client_shares(num_elements: int64, share_type: string) -> list[int64/float]
-        // Note: share_type can be "fixed" for SecretFixedPoint or omitted/empty for SecretInt
-        federated_learning_methods.insert("average_client_shares".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64, SymbolType::String],
-            return_type: SymbolType::List(Box::new(SymbolType::Float)), // Returns float for fixed-point
-            qualified_name: "FederatedLearning.average_client_shares".to_string(),
-        });
-
-        self.builtin_objects.insert("FederatedLearning".to_string(), BuiltinObjectInfo {
-            name: "FederatedLearning".to_string(),
-            methods: federated_learning_methods,
-        });
-
-        let federated_learning_info = SymbolInfo {
-            name: "FederatedLearning".to_string(),
-            kind: SymbolKind::BuiltinObject { object_type_name: "FederatedLearning".to_string() },
-            symbol_type: SymbolType::Object("FederatedLearning".to_string()),
-            is_secret: false,
-            defined_at: SourceLocation::default(),
-        };
-        if let Err(e) = global_scope.declare(federated_learning_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
