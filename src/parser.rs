@@ -260,7 +260,18 @@ impl<'a> Parser<'a> {
         // New syntax: optional '-> <type-or-nil>' before pragmas, then ':' to start body/header end
         let mut return_type: Option<Box<AstNode>> = None;
         if self.check(&TokenKind::Arrow) {
+            let arrow_location = self.current_token_info.map(|t| t.location.clone()).unwrap_or_default();
             self.advance(); // consume '->'
+
+            // Check for tuple return type syntax: -> (Type1, Type2)
+            // This is not supported - return types must be a single type
+            if self.check(&TokenKind::LParen) {
+                return Err(CompilerError::syntax_error(
+                    "Tuple return types are not supported",
+                    arrow_location
+                ).with_hint("Return a single value. If you need multiple values, consider using a custom type or restructuring your code."));
+            }
+
             // Special-case: allow 'nil' to mean no return (void)
             if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
                 // Treat as no return type
@@ -361,7 +372,17 @@ impl<'a> Parser<'a> {
         // Optional return type arrow
         let mut return_type: Option<Box<AstNode>> = None;
         if self.check(&TokenKind::Arrow) {
+            let arrow_location = self.current_token_info.map(|t| t.location.clone()).unwrap_or_default();
             self.advance(); // '->'
+
+            // Check for tuple return type syntax: -> (Type1, Type2)
+            if self.check(&TokenKind::LParen) {
+                return Err(CompilerError::syntax_error(
+                    "Tuple return types are not supported",
+                    arrow_location
+                ).with_hint("Return a single value. If you need multiple values, consider using a custom type or restructuring your code."));
+            }
+
             if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
                 self.advance(); // consume 'nil' => treat as no return type (void)
                 return_type = None;
@@ -685,6 +706,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::LBracket => {
                 // List literal: [elem1, elem2, ...]
+                let bracket_location = token_info.location.clone();
                 let mut elements = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
                     loop {
@@ -696,6 +718,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.consume(&TokenKind::RBracket, "Expected ']' after list elements")?;
+
+                // Empty list literals are not supported
+                if elements.is_empty() {
+                    return Err(CompilerError::syntax_error(
+                        "Empty list literals '[]' are not supported",
+                        bracket_location
+                    ).with_hint("Use 'create_array()' to create an empty list"));
+                }
+
                 Ok(AstNode::ListLiteral(elements))
             }
             TokenKind::LBrace => {
@@ -837,6 +868,20 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self) -> CompilerResult<AstNode> {
         let start_location = self.get_location();
         let expr = self.parse_expression()?;
+
+        // Check for tuple unpacking pattern: a, b = expr
+        // This is not supported in Stoffel-Lang
+        if self.check(&TokenKind::Comma) {
+            // Look ahead to see if this could be tuple unpacking
+            // Pattern: identifier, identifier... = expr
+            if matches!(expr, AstNode::Identifier(..)) {
+                return Err(CompilerError::syntax_error(
+                    "Tuple unpacking is not supported",
+                    start_location
+                ).with_hint("Assign to a single variable instead of multiple comma-separated variables"));
+            }
+        }
+
         // Could be assignment: expr = value
         if self.check(&TokenKind::Assign) {
             self.advance(); // Consume '='
@@ -845,7 +890,7 @@ impl<'a> Parser<'a> {
              if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
                  return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after assignment, found {:?}", self.current_token_info), self.get_location()));
              }
-            Ok(AstNode::Assignment { 
+            Ok(AstNode::Assignment {
                 target: Box::new(expr),
                 value: Box::new(value),
                 location: start_location, // Use location of the target expression start
@@ -899,10 +944,18 @@ impl<'a> Parser<'a> {
                             }
                         }
                         _ => {
+                            // Check if this is a capitalization error
+                            let hint = if base_name.to_lowercase() == "list" {
+                                format!("Did you mean 'list'? Type names are lowercase in Stoffel-Lang")
+                            } else if base_name.to_lowercase() == "dict" {
+                                format!("Did you mean 'dict'? Type names are lowercase in Stoffel-Lang")
+                            } else {
+                                "Supported generic types are: list[T], dict[K, V]".to_string()
+                            };
                             return Err(CompilerError::syntax_error(
                                 format!("Unknown generic type: {}", base_name),
                                 type_location,
-                            ).with_hint("Supported generic types are: list[T], dict[K, V]"));
+                            ).with_hint(hint));
                         }
                     }
                 } else {

@@ -839,4 +839,238 @@ impl SymbolTable {
     pub fn current_scope_id(&self) -> usize {
         self.current_scope_id
     }
+
+    /// Returns all visible symbol names from current scope up the chain.
+    /// Handles shadowing (inner scope symbols take precedence over outer).
+    pub fn get_visible_symbol_names(&self) -> Vec<String> {
+        let mut symbols = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut scope_id = Some(self.current_scope_id);
+
+        while let Some(id) = scope_id {
+            let scope = &self.scopes[id];
+            for (name, _) in &scope.symbols {
+                if !seen.contains(name) {
+                    seen.insert(name.clone());
+                    symbols.push(name.clone());
+                }
+            }
+            scope_id = scope.parent_scope_id;
+        }
+        symbols
+    }
+
+    /// Returns all callable symbol names (functions + builtins + object methods).
+    pub fn get_callable_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.get_visible_symbol_names()
+            .into_iter()
+            .filter(|name| {
+                self.lookup_symbol(name)
+                    .map(|info| matches!(info.kind,
+                        SymbolKind::Function { .. } | SymbolKind::BuiltinFunction { .. }))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Add builtin object methods as "Object.method"
+        for (obj_name, obj_info) in &self.builtin_objects {
+            for method_name in obj_info.methods.keys() {
+                names.push(format!("{}.{}", obj_name, method_name));
+            }
+        }
+        names
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::SourceLocation;
+
+    fn make_loc() -> SourceLocation {
+        SourceLocation::default()
+    }
+
+    fn make_variable(name: &str, symbol_type: SymbolType) -> SymbolInfo {
+        SymbolInfo {
+            name: name.to_string(),
+            kind: SymbolKind::Variable { is_mutable: false },
+            symbol_type,
+            is_secret: false,
+            defined_at: make_loc(),
+        }
+    }
+
+    fn make_function(name: &str, params: Vec<SymbolType>, return_type: SymbolType) -> SymbolInfo {
+        SymbolInfo {
+            name: name.to_string(),
+            kind: SymbolKind::Function {
+                parameters: params,
+                return_type,
+            },
+            symbol_type: SymbolType::Void,
+            is_secret: false,
+            defined_at: make_loc(),
+        }
+    }
+
+    // ===========================================
+    // Tests for get_visible_symbol_names
+    // ===========================================
+
+    #[test]
+    fn test_get_visible_symbols_empty_scope() {
+        let table = SymbolTable::new();
+        // New table has builtins but no user symbols at global scope
+        let symbols = table.get_visible_symbol_names();
+        // Should include builtin functions like "print", "create_array", etc.
+        assert!(symbols.contains(&"print".to_string()));
+        assert!(symbols.contains(&"create_array".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_single_scope() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_variable("counter", SymbolType::Int64));
+        table.declare_symbol(make_variable("total", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+        assert!(symbols.contains(&"counter".to_string()));
+        assert!(symbols.contains(&"total".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_nested_scopes() {
+        let mut table = SymbolTable::new();
+
+        // Global scope
+        table.declare_symbol(make_variable("global_var", SymbolType::Int64));
+
+        // Enter function scope
+        table.enter_scope();
+        table.declare_symbol(make_variable("local_var", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+
+        // Should see both global and local
+        assert!(symbols.contains(&"global_var".to_string()));
+        assert!(symbols.contains(&"local_var".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_shadowing() {
+        let mut table = SymbolTable::new();
+
+        // Global scope - declare 'x'
+        table.declare_symbol(make_variable("x", SymbolType::Int64));
+        table.declare_symbol(make_variable("y", SymbolType::Int64));
+
+        // Enter inner scope - shadow 'x'
+        table.enter_scope();
+        table.declare_symbol(make_variable("x", SymbolType::String)); // shadows outer x
+        table.declare_symbol(make_variable("z", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+
+        // Should see x, y, z (x only once due to shadowing)
+        let x_count = symbols.iter().filter(|s| *s == "x").count();
+        assert_eq!(x_count, 1, "Shadowed variable should appear only once");
+        assert!(symbols.contains(&"y".to_string()));
+        assert!(symbols.contains(&"z".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_after_exit_scope() {
+        let mut table = SymbolTable::new();
+
+        table.declare_symbol(make_variable("global_var", SymbolType::Int64));
+
+        table.enter_scope();
+        table.declare_symbol(make_variable("local_var", SymbolType::Int64));
+        table.exit_scope();
+
+        let symbols = table.get_visible_symbol_names();
+
+        // After exiting scope, local_var should not be visible
+        assert!(symbols.contains(&"global_var".to_string()));
+        assert!(!symbols.contains(&"local_var".to_string()));
+    }
+
+    // ===========================================
+    // Tests for get_callable_names
+    // ===========================================
+
+    #[test]
+    fn test_get_callable_names_includes_builtins() {
+        let table = SymbolTable::new();
+        let callables = table.get_callable_names();
+
+        // Should include builtin functions
+        assert!(callables.contains(&"print".to_string()));
+        assert!(callables.contains(&"create_array".to_string()));
+        assert!(callables.contains(&"array_push".to_string()));
+        assert!(callables.contains(&"array_length".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_includes_user_functions() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_function(
+            "calculate",
+            vec![SymbolType::Int64],
+            SymbolType::Int64,
+        ));
+        table.declare_symbol(make_function(
+            "process",
+            vec![SymbolType::String],
+            SymbolType::Void,
+        ));
+
+        let callables = table.get_callable_names();
+
+        assert!(callables.contains(&"calculate".to_string()));
+        assert!(callables.contains(&"process".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_excludes_variables() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_variable("my_var", SymbolType::Int64));
+        table.declare_symbol(make_function("my_func", vec![], SymbolType::Void));
+
+        let callables = table.get_callable_names();
+
+        assert!(!callables.contains(&"my_var".to_string()));
+        assert!(callables.contains(&"my_func".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_includes_builtin_object_methods() {
+        let table = SymbolTable::new();
+        let callables = table.get_callable_names();
+
+        // Should include builtin object methods as "Object.method"
+        assert!(callables.contains(&"Share.open".to_string()));
+        assert!(callables.contains(&"Share.mul".to_string()));
+        assert!(callables.contains(&"ClientStore.take_share".to_string()));
+        assert!(callables.contains(&"Mpc.party_id".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_nested_scope_functions() {
+        let mut table = SymbolTable::new();
+
+        // Global function
+        table.declare_symbol(make_function("global_func", vec![], SymbolType::Void));
+
+        // Enter scope and declare local function
+        table.enter_scope();
+        table.declare_symbol(make_function("local_func", vec![], SymbolType::Void));
+
+        let callables = table.get_callable_names();
+
+        // Should see both
+        assert!(callables.contains(&"global_func".to_string()));
+        assert!(callables.contains(&"local_func".to_string()));
+    }
 }

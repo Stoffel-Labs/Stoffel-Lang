@@ -288,6 +288,17 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     iter.next();
                     push_token(TokenKind::Arrow, make_location(line, column));
                     column += 2;
+                } else if iter.peek() == Some(&'=') {
+                    // Compound assignment -= is not supported
+                    let location = make_location(line, column);
+                    iter.next(); // consume '='
+                    let snippet = extract_source_snippet(source, &location, 2);
+                    return Err(CompilerError::syntax_error(
+                        "Compound assignment operator '-=' is not supported",
+                        location
+                    )
+                    .with_snippet(snippet)
+                    .with_hint("Use 'x = x - y' instead of 'x -= y'"));
                 } else {
                     // Fallback to operator collection (e.g., '-', '->' handled above)
                     let start_col = column;
@@ -314,8 +325,28 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         break;
                     }
                 }
+
+                // Check for compound assignment operators (not supported)
+                if let Some(base_op) = match op.as_str() {
+                    "+=" => Some("+"),
+                    "-=" => Some("-"),
+                    "*=" => Some("*"),
+                    "/=" => Some("/"),
+                    "%=" => Some("%"),
+                    _ => None,
+                } {
+                    let location = make_location(line, start_col);
+                    let snippet = extract_source_snippet(source, &location, 2);
+                    return Err(CompilerError::syntax_error(
+                        format!("Compound assignment operator '{}' is not supported", op),
+                        location
+                    )
+                    .with_snippet(snippet)
+                    .with_hint(format!("Use 'x = x {} y' instead of 'x {} y'", base_op, op)));
+                }
+
                 column += op.len(); // Update column based on operator length
-                push_token(TokenKind::Operator(op), make_location(line, column));
+                push_token(TokenKind::Operator(op), make_location(line, start_col));
             }
             // Numbers (Int, Float)
             c if c.is_ascii_digit() => {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{AstNode, Pragma, Value};
 use crate::errors::{CompilerError, ErrorReporter, SourceLocation};
+use crate::suggestions::{suggest_method_to_function, suggest_from_symbols, suggest_function_from_symbols};
 use crate::symbol_table::{SymbolDeclarationError, SymbolInfo, SymbolKind, SymbolTable, SymbolType};
 
 /// Performs semantic analysis (symbol checking, type checking) on the AST.
@@ -438,13 +439,27 @@ impl<'a> SemanticAnalyzer<'a> {
                     // Return the type stored in the symbol table
                     Ok((AstNode::Identifier(name.clone(), location.clone()), info.symbol_type.clone()))
                 } else {
-                    self.error_reporter.add_error(
-                        CompilerError::semantic_error(
+                    // Check if this looks like a method name that should be a function
+                    // The parser transforms obj.method(args) into method(obj, args) via UFCS,
+                    // so we catch method-like identifiers here
+                    if let Some(suggestion) = suggest_method_to_function(&name) {
+                        self.error_reporter.add_error(
+                            CompilerError::semantic_error(
+                                format!("'{}' is not a valid function name", name),
+                                location.clone(),
+                            ).with_hint(format!("Stoffel-Lang uses functions instead of methods. Use {} instead", suggestion))
+                        );
+                    } else {
+                        // Semantic-aware suggestion using actual symbols in scope
+                        let mut error = CompilerError::semantic_error(
                             format!("Use of undeclared identifier '{}'", name),
                             location.clone(),
-                        )
-                        // TODO: Add suggestion using crate::suggestions::suggest_identifier
-                    );
+                        );
+                        if let Some(suggestion) = suggest_from_symbols(&name, &self.symbol_table) {
+                            error = error.with_hint(format!("Did you mean '{}'?", suggestion));
+                        }
+                        self.error_reporter.add_error(error);
+                    }
                     Err(())
                 }
             }
@@ -865,14 +880,37 @@ impl<'a> SemanticAnalyzer<'a> {
                                 }
                             }
                         } else {
-                            self.error_reporter.add_error(CompilerError::semantic_error(
+                            // Semantic-aware suggestion using actual functions in scope
+                            let mut error = CompilerError::semantic_error(
                                 format!("Use of undeclared function '{}'", name),
                                 loc.clone(),
-                            ));
+                            );
+                            if let Some(suggestion) = suggest_function_from_symbols(&name, &self.symbol_table) {
+                                error = error.with_hint(format!("Did you mean '{}'?", suggestion));
+                            }
+                            self.error_reporter.add_error(error);
                             return Err(());
                         }
                     }
-                    // TODO: Handle other callable types (e.g., function pointers, methods)
+                    // Handle method-style calls that should be function calls
+                    AstNode::FieldAccess { field_name, location: field_loc, .. } => {
+                        // Check if this is a common method that should be a function
+                        if let Some(suggestion) = suggest_method_to_function(&field_name) {
+                            self.error_reporter.add_error(
+                                CompilerError::semantic_error(
+                                    format!("Method '.{}()' is not supported", field_name),
+                                    field_loc.clone(),
+                                ).with_hint(format!("Use {} instead", suggestion))
+                            );
+                        } else {
+                            self.error_reporter.add_error(CompilerError::type_error(
+                                format!("Method calls like '.{}()' are not supported", field_name),
+                                field_loc.clone(),
+                            ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                        }
+                        return Err(());
+                    }
+                    // Other non-callable expressions
                     _ => {
                         self.error_reporter.add_error(CompilerError::type_error(
                             "Expression is not callable",
@@ -931,10 +969,14 @@ impl<'a> SemanticAnalyzer<'a> {
                         if let Some(info) = self.symbol_table.lookup_symbol(name) {
                             (name.clone(), info.clone())
                         } else {
-                            self.error_reporter.add_error(CompilerError::semantic_error(
+                            let mut error = CompilerError::semantic_error(
                                 format!("Use of undeclared function '{}' in command call", name),
                                 loc.clone(),
-                            ));
+                            );
+                            if let Some(suggestion) = suggest_function_from_symbols(&name, &self.symbol_table) {
+                                error = error.with_hint(format!("Did you mean '{}'?", suggestion));
+                            }
+                            self.error_reporter.add_error(error);
                             return Err(());
                         }
                     }
@@ -1113,7 +1155,29 @@ impl<'a> SemanticAnalyzer<'a> {
             AstNode::FieldAccess { object, field_name, location } => {
                 let (checked_object, object_type) = self.analyze_node(*object)?;
 
-                // For now, allow field access on any type and return Unknown
+                // Check if this looks like a method call attempt on a list or primitive type
+                // and provide helpful suggestions
+                let is_builtin_type = matches!(
+                    object_type.underlying_type(),
+                    SymbolType::List(_) | SymbolType::Int64 | SymbolType::Int32 |
+                    SymbolType::Int16 | SymbolType::Int8 |
+                    SymbolType::Float | SymbolType::String | SymbolType::Bool
+                );
+
+                if is_builtin_type {
+                    // Check if this is a common method name that should be a function
+                    if let Some(suggestion) = suggest_method_to_function(&field_name) {
+                        self.error_reporter.add_error(
+                            CompilerError::semantic_error(
+                                format!("Method '.{}' is not supported on this type", field_name),
+                                location.clone(),
+                            ).with_hint(format!("Use {} instead", suggestion))
+                        );
+                        return Err(());
+                    }
+                }
+
+                // For now, allow field access on other types and return Unknown
                 // TODO: Implement proper object type field lookup for typed objects
                 let field_type = SymbolType::Unknown;
 
