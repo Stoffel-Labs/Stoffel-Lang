@@ -554,6 +554,11 @@ impl<'a> SemanticAnalyzer<'a> {
                     .map(|tn| SymbolType::from_ast(tn))
                     .unwrap_or_else(|| value_type.clone()); // Infer if no annotation
 
+                // Validate the type annotation if present - ensure it refers to an actual type
+                if let Some(tn) = &type_annotation {
+                    self.validate_type_annotation(&declared_type, tn.location())?;
+                }
+
                 // 3. Check for type consistency (with integer width/range rules)
                 if type_annotation.is_some() && value_type != SymbolType::Unknown {
                     if self.check_integer_compat(checked_value_node.as_deref(), &value_type, &declared_type, location.clone()).is_err() {
@@ -618,6 +623,18 @@ impl<'a> SemanticAnalyzer<'a> {
                 } else {
                     ret_type_annotation
                 };
+
+                // Validate parameter types - ensure they refer to actual types, not functions
+                for (param, param_type) in parameters.iter().zip(param_types.iter()) {
+                    let param_loc = param.type_annotation.as_ref()
+                        .map_or_else(|| location.clone(), |n| n.location());
+                    self.validate_type_annotation(param_type, param_loc)?;
+                }
+
+                // Validate return type
+                if let Some(rt_node) = &return_type {
+                    self.validate_type_annotation(&final_return_type, rt_node.location())?;
+                }
 
                 // Check for pragmas like 'builtin'
                 let mut is_builtin = false;
@@ -1233,6 +1250,72 @@ impl<'a> SemanticAnalyzer<'a> {
 
     // --- Helper Functions ---
 
+    /// Validates that a SymbolType doesn't contain invalid type references.
+    /// Returns an error if a TypeName refers to a function or undeclared identifier.
+    fn validate_type_annotation(&mut self, sym_type: &SymbolType, location: SourceLocation) -> Result<(), ()> {
+        match sym_type {
+            SymbolType::TypeName(name) => {
+                // Check if the name refers to something in the symbol table
+                if let Some(info) = self.symbol_table.lookup_symbol(name) {
+                    match &info.kind {
+                        SymbolKind::Type => Ok(()), // Valid type reference
+                        SymbolKind::Function { .. } | SymbolKind::BuiltinFunction { .. } => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a function, not a type", name),
+                                    location,
+                                ).with_hint(format!("'{}' is defined as a function. To use a custom type, define it with 'type' or 'object' (type aliases not yet supported)", name))
+                            );
+                            Err(())
+                        }
+                        SymbolKind::Variable { .. } => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a variable, not a type", name),
+                                    location,
+                                ).with_hint("Variable names cannot be used as types")
+                            );
+                            Err(())
+                        }
+                        SymbolKind::BuiltinObject { .. } => {
+                            // Builtin objects are valid types (e.g., Share, ClientStore)
+                            Ok(())
+                        }
+                        SymbolKind::Module => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a module, not a type", name),
+                                    location,
+                                )
+                            );
+                            Err(())
+                        }
+                    }
+                } else {
+                    // Not found in symbol table - undefined type
+                    let mut error = CompilerError::type_error(
+                        format!("Undefined type '{}'", name),
+                        location,
+                    );
+                    // Try to suggest a similar type name
+                    if let Some(suggestion) = suggest_from_symbols(name, &self.symbol_table) {
+                        error = error.with_hint(format!("Did you mean '{}'?", suggestion));
+                    }
+                    self.error_reporter.add_error(error);
+                    Err(())
+                }
+            }
+            // Recursively validate nested types
+            SymbolType::List(elem) => self.validate_type_annotation(elem, location),
+            SymbolType::Dict(key, val) => {
+                self.validate_type_annotation(key, location.clone())?;
+                self.validate_type_annotation(val, location)
+            }
+            SymbolType::Secret(inner) => self.validate_type_annotation(inner, location),
+            // All other types are primitives or Unknown - valid
+            _ => Ok(()),
+        }
+    }
 }
 
 // Helper to get a string representation of a SymbolType for error messages
