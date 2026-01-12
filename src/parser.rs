@@ -526,43 +526,29 @@ impl<'a> Parser<'a> {
         // 'in' is tokenized as a keyword in our lexer
         self.consume_keyword("in", "Expected 'in' in for-loop header")?;
 
-        // Parse iterable expression, but enforce tight range syntax a..b for for-loops
+        // Parse iterable expression - supports both range syntax (a..b) and collection iteration
         let iterable = {
-            // Parse left expression
-            let left = self.parse_expression_with_precedence(5 /* precedence just below '..' (4) so we stop before parsing '..' */)?;
-            // Now we require exactly the '..' operator next, with no whitespace around it.
-            // Since our lexer doesn't record end positions, we enforce the rule syntactically:
-            // only accept the '..' operator token immediately next; any spaces before/after would have been tokenized as separate tokens already,
-            // but to be strict per request, we reject forms like 'a .. b' by requiring that the operator appears right now,
-            // and we forbid an intervening Newline.
-            match self.current_token_info {
-                Some(TokenInfo { kind: TokenKind::Operator(op), location: op_loc }) if op == ".." => {
-                    // Ensure no spaces variant in source: best-effort by checking previous token and next token are expressions
-                    // and emitting a tailored error if user likely wrote spaces in tests that used 'a .. b'.
-                    // Consume '..'
+            // Parse left expression with precedence just below '..' so we stop before parsing '..'
+            let left = self.parse_expression_with_precedence(5)?;
+
+            // Check if next token is '..' for range syntax
+            match &self.current_token_info {
+                Some(TokenInfo { kind: TokenKind::Operator(op), .. }) if op == ".." => {
+                    // This is a range expression - consume '..' and parse right side
                     self.advance();
+                    let right = self.parse_expression_with_precedence(4)?;
+                    AstNode::BinaryOperation {
+                        op: "..".to_string(),
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        location: self.last_location.clone(),
+                    }
                 }
-                Some(TokenInfo { ref kind, ref location }) => {
-                    // If the next token is not '..', but a range was intended, produce a targeted error.
-                    return Err(CompilerError::syntax_error(
-                        "Expected tight range 'a..b' in for-loop (no spaces around '..')",
-                        location.clone(),
-                    ).with_hint("Write: for i in a..b:"));
+                _ => {
+                    // Not a range - this is a collection/iterable expression
+                    // The 'left' expression is our iterable (e.g., a list variable)
+                    left
                 }
-                None => {
-                    return Err(CompilerError::syntax_error(
-                        "Unexpected end of input while parsing for-loop range; expected '..'",
-                        self.last_location.clone(),
-                    ).with_hint("Write: for i in a..b:"));
-                }
-            }
-            // After consuming '..', immediately parse the right expression
-            let right = self.parse_expression_with_precedence(4)?;
-            AstNode::BinaryOperation {
-                op: "..".to_string(),
-                left: Box::new(left),
-                right: Box::new(right),
-                location: self.last_location.clone(),
             }
         };
 
@@ -905,7 +891,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // Parses type annotations (e.g., int, string, MyObject, list[int], secret int)
+    // Parses type annotations (e.g., int, string, MyObject, List[int], secret int)
     // IMPORTANT: This function *only* parses the type name/structure itself.
     // It handles the optional 'secret' keyword internally.
     fn parse_type_annotation(&mut self) -> CompilerResult<AstNode> {
@@ -922,21 +908,21 @@ impl<'a> Parser<'a> {
                 let base_name = name.clone();
                 self.advance(); // Consume identifier
 
-                // Check for generic type parameters: list[int], dict[string, int]
+                // Check for generic type parameters: List[int], Dict[string, int]
                 if self.check(&TokenKind::LBracket) {
                     self.advance(); // Consume '['
 
                     match base_name.as_str() {
-                        "list" => {
+                        "List" => {
                             let element_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after list element type")?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after List element type")?;
                             AstNode::ListType(Box::new(element_type))
                         }
-                        "dict" => {
+                        "Dict" => {
                             let key_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::Comma, "Expected ',' between dict key and value types")?;
+                            self.consume(&TokenKind::Comma, "Expected ',' between Dict key and value types")?;
                             let value_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after dict value type")?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after Dict value type")?;
                             AstNode::DictType {
                                 key_type: Box::new(key_type),
                                 value_type: Box::new(value_type),
@@ -945,12 +931,12 @@ impl<'a> Parser<'a> {
                         }
                         _ => {
                             // Check if this is a capitalization error
-                            let hint = if base_name.to_lowercase() == "list" {
-                                format!("Did you mean 'list'? Type names are lowercase in Stoffel-Lang")
-                            } else if base_name.to_lowercase() == "dict" {
-                                format!("Did you mean 'dict'? Type names are lowercase in Stoffel-Lang")
+                            let hint = if base_name == "list" {
+                                "Did you mean 'List'? Generic types use PascalCase".to_string()
+                            } else if base_name == "dict" {
+                                "Did you mean 'Dict'? Generic types use PascalCase".to_string()
                             } else {
-                                "Supported generic types are: list[T], dict[K, V]".to_string()
+                                "Supported generic types are: List[T], Dict[K, V]".to_string()
                             };
                             return Err(CompilerError::syntax_error(
                                 format!("Unknown generic type: {}", base_name),
