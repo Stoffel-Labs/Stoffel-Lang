@@ -67,7 +67,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Checks if two types are compatible, allowing Unknown to match any type.
     /// This enables type refinement where a concrete type annotation can refine
-    /// an Unknown type from inference (e.g., `list[float]` refines `list[<unknown>]`).
+    /// an Unknown type from inference (e.g., `List[float]` refines `List[<unknown>]`).
     fn types_compatible(src: &SymbolType, dst: &SymbolType) -> bool {
         // Unknown is compatible with anything
         if *src == SymbolType::Unknown || *dst == SymbolType::Unknown {
@@ -321,13 +321,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 // For-loops introduce a new scope for loop variables
                 // 1. Traverse the iterable expression
                 self.populate_symbols(iterable)?;
-                // 2. Enter loop scope and declare loop variables (typed as int for now)
+                // 2. Enter loop scope and declare loop variables
+                //    Use Unknown type here - actual type is inferred during analyze_node
                 self.symbol_table.enter_scope();
                 for var_name in variables {
                     let info = SymbolInfo {
                         name: var_name.clone(),
                         kind: SymbolKind::Variable { is_mutable: false },
-                        symbol_type: SymbolType::Int64,
+                        symbol_type: SymbolType::Unknown,
                         is_secret: false,
                         defined_at: node.location(),
                     };
@@ -442,7 +443,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     // Check if this looks like a method name that should be a function
                     // The parser transforms obj.method(args) into method(obj, args) via UFCS,
                     // so we catch method-like identifiers here
-                    if let Some(suggestion) = suggest_method_to_function(&name) {
+                    if let Some(suggestion) = suggest_method_to_function(&name, &self.symbol_table) {
                         self.error_reporter.add_error(
                             CompilerError::semantic_error(
                                 format!("'{}' is not a valid function name", name),
@@ -756,7 +757,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
 
             AstNode::ForLoop { variables, iterable, body, location } => {
-                // Support only single variable numeric ranges for now: for i in a .. b
+                // Support single variable iteration over ranges or collections
                 if variables.len() != 1 {
                     self.error_reporter.add_error(CompilerError::semantic_error(
                         "For-loop with multiple variables not supported yet",
@@ -764,29 +765,49 @@ impl<'a> SemanticAnalyzer<'a> {
                     ));
                     return Err(());
                 }
-                // Analyze iterable
-                let (checked_iterable, _iter_type) = self.analyze_node(*iterable)?;
-                // Check it is a range binary op
-                match &checked_iterable {
-                    AstNode::BinaryOperation { op, left: _, right: _, location: op_loc } if op == ".." => {
-                        // ok
+
+                // Analyze iterable to determine its type
+                let (checked_iterable, iter_type) = self.analyze_node(*iterable)?;
+
+                // Determine the loop variable type based on the iterable
+                let (loop_var_type, is_secret) = match &checked_iterable {
+                    // Range iteration: for i in a..b
+                    AstNode::BinaryOperation { op, .. } if op == ".." => {
+                        (SymbolType::Int64, false)
                     }
+                    // Collection iteration: infer element type from iterable type
                     _ => {
-                        self.error_reporter.add_error(CompilerError::semantic_error(
-                            "Unsupported for-loop iterable; expected 'a .. b' range",
-                            checked_iterable.location(),
-                        ));
-                        return Err(());
+                        match iter_type.underlying_type() {
+                            SymbolType::List(elem_type) => {
+                                let is_secret = matches!(iter_type, SymbolType::Secret(_));
+                                (elem_type.as_ref().clone(), is_secret)
+                            }
+                            SymbolType::String => {
+                                // Iterating over a string yields characters (as strings)
+                                (SymbolType::String, false)
+                            }
+                            _ => {
+                                self.error_reporter.add_error(CompilerError::semantic_error(
+                                    format!(
+                                        "Cannot iterate over type '{}'; expected a range (a..b) or a List",
+                                        declared_type_to_string(&iter_type)
+                                    ),
+                                    checked_iterable.location(),
+                                ));
+                                return Err(());
+                            }
+                        }
                     }
-                }
-                // Enter loop scope and declare the loop variable as int (clear)
+                };
+
+                // Enter loop scope and declare the loop variable with inferred type
                 self.symbol_table.enter_scope();
                 let var_name = variables[0].clone();
                 let var_info = SymbolInfo {
                     name: var_name.clone(),
                     kind: SymbolKind::Variable { is_mutable: false },
-                    symbol_type: SymbolType::Int64,
-                    is_secret: false,
+                    symbol_type: loop_var_type,
+                    is_secret,
                     defined_at: location.clone(),
                 };
                 self.symbol_table.declare_symbol(var_info);
@@ -895,7 +916,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     // Handle method-style calls that should be function calls
                     AstNode::FieldAccess { field_name, location: field_loc, .. } => {
                         // Check if this is a common method that should be a function
-                        if let Some(suggestion) = suggest_method_to_function(&field_name) {
+                        if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
                             self.error_reporter.add_error(
                                 CompilerError::semantic_error(
                                     format!("Method '.{}()' is not supported", field_name),
@@ -1166,7 +1187,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
                 if is_builtin_type {
                     // Check if this is a common method name that should be a function
-                    if let Some(suggestion) = suggest_method_to_function(&field_name) {
+                    if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
                         self.error_reporter.add_error(
                             CompilerError::semantic_error(
                                 format!("Method '.{}' is not supported on this type", field_name),
@@ -1237,8 +1258,8 @@ fn declared_type_to_string(sym_type: &SymbolType) -> String {
         SymbolType::TypeName(name) => name.clone(),
         SymbolType::Unknown => "<unknown>".to_string(),
         // Collection types
-        SymbolType::List(elem) => format!("list[{}]", declared_type_to_string(elem)),
-        SymbolType::Dict(key, val) => format!("dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
+        SymbolType::List(elem) => format!("List[{}]", declared_type_to_string(elem)),
+        SymbolType::Dict(key, val) => format!("Dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
         SymbolType::Object(name) => name.clone(),
     }
 }
