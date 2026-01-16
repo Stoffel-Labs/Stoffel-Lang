@@ -101,7 +101,7 @@ main main() -> nil:
 fn test_array_function_typo_suggests_correct_name() {
     let source = r#"
 main main() -> nil:
-  var items: list[int64] = create_array()
+  var items: List[int64] = create_array()
   aray_push(items, 5)
 "#;
 
@@ -114,7 +114,7 @@ main main() -> nil:
 fn test_create_array_typo() {
     let source = r#"
 main main() -> nil:
-  var items: list[int64] = creat_array()
+  var items: List[int64] = creat_array()
 "#;
 
     let errors = compile_and_get_errors(source);
@@ -130,7 +130,7 @@ main main() -> nil:
 fn test_method_append_suggests_array_push() {
     let source = r#"
 main main() -> nil:
-  var items: list[int64] = create_array()
+  var items: List[int64] = create_array()
   items.append(5)
 "#;
 
@@ -143,7 +143,7 @@ main main() -> nil:
 fn test_method_length_suggests_array_length() {
     let source = r#"
 main main() -> nil:
-  var items: list[int64] = create_array()
+  var items: List[int64] = create_array()
   var n: int64 = items.length()
 "#;
 
