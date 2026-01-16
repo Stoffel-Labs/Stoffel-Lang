@@ -1,19 +1,53 @@
 use crate::ast::AstNode;
 
+/// List of builtin object names that have special method call semantics.
+/// For these objects, method calls are emitted as qualified names (e.g., "ClientStore.take_share")
+/// without prepending the object as an argument.
+const BUILTIN_OBJECTS: &[&str] = &[
+    "ClientStore",
+    "Share",
+    "Mpc",
+    "Rbc",
+    "Aba",
+    "ConsensusValue",
+];
+
+/// Checks if a name is a builtin object that uses qualified method names
+fn is_builtin_object(name: &str) -> bool {
+    BUILTIN_OBJECTS.contains(&name)
+}
+
 /// Transforms the AST to support Uniform Function Call Syntax (UFCS)
 /// This allows for multiple calling styles:
 /// 1. Traditional method call: obj.method(arg1, arg2)
 /// 2. Function call with object as first argument: method(obj, arg1, arg2)
 /// 3. Command-style call: obj method arg1 arg2 (without parentheses)
 /// 4. Infix operator style: arg1.op(arg2) equivalent to op(arg1, arg2)
+///
+/// Special handling for builtin objects (like ClientStore):
+/// - ClientStore.method(args) is transformed to call "ClientStore.method" directly
+/// - The object is NOT prepended as an argument (VM doesn't expect it)
 pub fn transform_ufcs(node: AstNode) -> AstNode {
     match node {
         AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
-            // Style 1: Transform obj.method(arg1, arg2) into method(obj, arg1, arg2)
+            // Style 1: Transform obj.method(arg1, arg2)
             if let AstNode::FieldAccess { object, field_name, location: fa_location } = *function {
-                // Convert to MethodCall(object, method_name, args) or
-                // Let's choose the latter for simplicity here.
-                let mut new_args = vec![*object];
+                // Check if this is a builtin object method call
+                if let AstNode::Identifier(obj_name, _) = &*object {
+                    if is_builtin_object(obj_name) {
+                        // For builtin objects, use qualified method name and don't prepend object
+                        let qualified_name = format!("{}.{}", obj_name, field_name);
+                        return AstNode::FunctionCall {
+                            function: Box::new(AstNode::Identifier(qualified_name, fa_location.clone())),
+                            arguments: arguments.into_iter().map(transform_ufcs).collect(),
+                            location: fa_location,
+                            resolved_return_type,
+                        };
+                    }
+                }
+
+                // For regular objects, use standard UFCS: prepend object as first argument
+                let mut new_args = vec![transform_ufcs(*object)];
                 new_args.extend(arguments.into_iter().map(transform_ufcs));
                 return AstNode::FunctionCall {
                     function: Box::new(AstNode::Identifier(field_name, location)),

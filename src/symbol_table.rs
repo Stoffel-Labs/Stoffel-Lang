@@ -10,11 +10,32 @@ pub enum SymbolKind {
     Type,
     BuiltinFunction { parameters: Vec<SymbolType>, return_type: SymbolType },
     Module,
+    /// A builtin object type (like ClientStore) - the name refers to the BuiltinObjectInfo
+    BuiltinObject { object_type_name: String },
     // Add more kinds as needed (e.g., EnumMember, Field)
 }
 
+/// Information about a method on a builtin object
+#[derive(Debug, Clone)]
+pub struct ObjectMethodInfo {
+    /// Parameters for the method (excludes the implicit receiver/self)
+    pub parameters: Vec<SymbolType>,
+    /// Return type of the method
+    pub return_type: SymbolType,
+    /// The qualified name used in bytecode (e.g., "ClientStore.take_share")
+    pub qualified_name: String,
+}
+
+/// Information about a builtin object type (like ClientStore)
+#[derive(Debug, Clone)]
+pub struct BuiltinObjectInfo {
+    /// The name of the object type
+    pub name: String,
+    /// Methods available on this object type
+    pub methods: HashMap<String, ObjectMethodInfo>,
+}
+
 /// Represents the type of a symbol (primitive or user-defined)
-/// TODO: This needs to be more sophisticated to handle generics, objects, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolType {
     // Signed integers
@@ -35,7 +56,10 @@ pub enum SymbolType {
     Secret(Box<SymbolType>),
     TypeName(String), // For user-defined types
     Unknown, // Placeholder during analysis
-    // Add complex types: Array, Tuple, Object, FunctionSignature, etc.
+    // Collection types
+    List(Box<SymbolType>),                    // list[T]
+    Dict(Box<SymbolType>, Box<SymbolType>),   // dict[K, V]
+    Object(String),                            // Named object type
 }
 
 impl SymbolType {
@@ -111,6 +135,26 @@ impl SymbolType {
         }
     }
 
+    /// Gets the element type for list types.
+    pub fn element_type(&self) -> Option<&SymbolType> {
+        match self.underlying_type() {
+            SymbolType::List(elem) => Some(elem),
+            _ => None,
+        }
+    }
+
+    /// Checks if the type is indexable (list, string, dict).
+    pub fn is_indexable(&self) -> bool {
+        matches!(self.underlying_type(),
+            SymbolType::List(_) | SymbolType::String | SymbolType::Dict(_, _))
+    }
+
+    /// Checks if the type is a collection (list or dict).
+    pub fn is_collection(&self) -> bool {
+        matches!(self.underlying_type(),
+            SymbolType::List(_) | SymbolType::Dict(_, _))
+    }
+
     /// Returns true if converting any value of `self` to `target` is safe (implicit widening).
     /// Conservative: allows signed->signed widening, unsigned->unsigned widening,
     /// and unsigned->signed only if target bit width > source bit width.
@@ -134,7 +178,7 @@ impl SymbolType {
         match node {
             AstNode::Identifier(name, _) => match name.as_str() {
                 // Signed ints (aliases)
-                "i64" | "int64" => SymbolType::Int64,
+                "i64" | "int64" | "int" => SymbolType::Int64,
                 "i32" | "int32" => SymbolType::Int32,
                 "i16" | "int16" => SymbolType::Int16,
                 "i8"  | "int8"  => SymbolType::Int8,
@@ -154,7 +198,15 @@ impl SymbolType {
             AstNode::SecretType(inner_node) => {
                 SymbolType::Secret(Box::new(SymbolType::from_ast(inner_node)))
             }
-            // TODO: Handle ListType, TupleType, FunctionType, etc.
+            AstNode::ListType(element_type) => {
+                SymbolType::List(Box::new(SymbolType::from_ast(element_type)))
+            }
+            AstNode::DictType { key_type, value_type, .. } => {
+                SymbolType::Dict(
+                    Box::new(SymbolType::from_ast(key_type)),
+                    Box::new(SymbolType::from_ast(value_type))
+                )
+            }
             _ => SymbolType::Unknown, // Cannot determine type from this node
         }
     }
@@ -227,6 +279,8 @@ pub struct SymbolTable {
     current_scope_id: usize,    // ID of the currently active scope
     next_scope_id: usize,       // Counter for assigning unique scope IDs
     pub errors: Vec<(SymbolDeclarationError, SourceLocation)>, // Store error and location of the failed declaration
+    /// Registry of builtin object types (like ClientStore)
+    pub builtin_objects: HashMap<String, BuiltinObjectInfo>,
 }
 
 impl SymbolTable {
@@ -236,11 +290,23 @@ impl SymbolTable {
             current_scope_id: 0,
             next_scope_id: 1, // 0 is global scope
             errors: Vec::new(),
+            builtin_objects: HashMap::new(),
         };
         // Create the global scope (ID 0)
         table.scopes.push(Scope::new(0, None));
         table.add_builtins();
         table
+    }
+
+    /// Looks up a builtin object type by name
+    pub fn lookup_builtin_object(&self, name: &str) -> Option<&BuiltinObjectInfo> {
+        self.builtin_objects.get(name)
+    }
+
+    /// Looks up a method on a builtin object type
+    pub fn lookup_builtin_method(&self, object_name: &str, method_name: &str) -> Option<&ObjectMethodInfo> {
+        self.builtin_objects.get(object_name)
+            .and_then(|obj| obj.methods.get(method_name))
     }
 
     /// Adds built-in functions and types to the global scope.
@@ -262,11 +328,35 @@ impl SymbolTable {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
         }
 
-        // Add ClientStore global object (as a constant/singleton instance)
+        // Add ClientStore as a builtin object with methods
+        let mut client_store_methods = HashMap::new();
+        client_store_methods.insert("take_share".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+            qualified_name: "ClientStore.take_share".to_string(),
+        });
+        client_store_methods.insert("take_share_fixed".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Secret(Box::new(SymbolType::Float)),
+            qualified_name: "ClientStore.take_share_fixed".to_string(),
+        });
+        client_store_methods.insert("get_number_clients".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "ClientStore.get_number_clients".to_string(),
+        });
+
+        // Register the builtin object
+        self.builtin_objects.insert("ClientStore".to_string(), BuiltinObjectInfo {
+            name: "ClientStore".to_string(),
+            methods: client_store_methods,
+        });
+
+        // Add ClientStore as a global symbol (singleton instance)
         let client_store_info = SymbolInfo {
             name: "ClientStore".to_string(),
-            kind: SymbolKind::Variable { is_mutable: false },
-            symbol_type: SymbolType::TypeName("ClientStore".to_string()),
+            kind: SymbolKind::BuiltinObject { object_type_name: "ClientStore".to_string() },
+            symbol_type: SymbolType::Object("ClientStore".to_string()),
             is_secret: false,
             defined_at: SourceLocation::default(),
         };
@@ -274,39 +364,313 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
-        // Add take_share method for ClientStore
-        // take_share(ClientStore, client_idx: int, share_idx: int) -> secret
-        let take_share_info = SymbolInfo {
-            name: "take_share".to_string(),
-            kind: SymbolKind::BuiltinFunction {
-                parameters: vec![
-                    SymbolType::TypeName("ClientStore".to_string()),
-                    SymbolType::Int64,
-                    SymbolType::Int64,
-                ],
-                return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
-            },
-            symbol_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+        // =====================================================================
+        // Share - Secret share operations (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut share_methods = HashMap::new();
+
+        // Share.from_clear(value) -> Object (share object)
+        share_methods.insert("from_clear".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64], // Also accepts Float, Bool at runtime
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear".to_string(),
+        });
+
+        // Share.from_clear_int(value, bit_length) -> Object
+        share_methods.insert("from_clear_int".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear_int".to_string(),
+        });
+
+        // Share.from_clear_fixed(value, total_bits, frac_bits) -> Object
+        share_methods.insert("from_clear_fixed".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Float, SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.from_clear_fixed".to_string(),
+        });
+
+        // Share.add(share1, share2) -> Object (local operation)
+        share_methods.insert("add".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.add".to_string(),
+        });
+
+        // Share.sub(share1, share2) -> Object (local operation)
+        share_methods.insert("sub".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.sub".to_string(),
+        });
+
+        // Share.neg(share) -> Object (local operation)
+        share_methods.insert("neg".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.neg".to_string(),
+        });
+
+        // Share.add_scalar(share, scalar) -> Object (local operation)
+        share_methods.insert("add_scalar".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.add_scalar".to_string(),
+        });
+
+        // Share.mul_scalar(share, scalar) -> Object (local operation)
+        share_methods.insert("mul_scalar".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.mul_scalar".to_string(),
+        });
+
+        // Share.mul(share1, share2) -> Object (network operation)
+        share_methods.insert("mul".to_string(), ObjectMethodInfo {
+            parameters: vec![
+                SymbolType::Object("Share".to_string()),
+                SymbolType::Object("Share".to_string()),
+            ],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.mul".to_string(),
+        });
+
+        // Share.open(share) -> int64/float (network operation)
+        share_methods.insert("open".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Int64, // Can also return Float depending on share type
+            qualified_name: "Share.open".to_string(),
+        });
+
+        // Share.send_to_client(share, client_id) -> bool
+        share_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Share.send_to_client".to_string(),
+        });
+
+        // Share.interpolate_local(shares_array) -> int64/float
+        share_methods.insert("interpolate_local".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
+            return_type: SymbolType::Int64,
+            qualified_name: "Share.interpolate_local".to_string(),
+        });
+
+        // Share.get_type(share) -> string
+        share_methods.insert("get_type".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::String,
+            qualified_name: "Share.get_type".to_string(),
+        });
+
+        // Share.get_party_id(share) -> int64
+        share_methods.insert("get_party_id".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("Share".to_string())],
+            return_type: SymbolType::Int64,
+            qualified_name: "Share.get_party_id".to_string(),
+        });
+
+        // Share.batch_open(shares_array) -> list[int64/float]
+        share_methods.insert("batch_open".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
+            return_type: SymbolType::List(Box::new(SymbolType::Unknown)), // Can be int64 or float
+            qualified_name: "Share.batch_open".to_string(),
+        });
+
+        self.builtin_objects.insert("Share".to_string(), BuiltinObjectInfo {
+            name: "Share".to_string(),
+            methods: share_methods,
+        });
+
+        let share_info = SymbolInfo {
+            name: "Share".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Share".to_string() },
+            symbol_type: SymbolType::Object("Share".to_string()),
             is_secret: false,
             defined_at: SourceLocation::default(),
         };
-        if let Err(e) = global_scope.declare(take_share_info) {
+        if let Err(e) = global_scope.declare(share_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
-        // Add get_number_clients method for ClientStore
-        // get_number_clients(ClientStore) -> int64
-        let get_number_clients_info = SymbolInfo {
-            name: "get_number_clients".to_string(),
-            kind: SymbolKind::BuiltinFunction {
-                parameters: vec![SymbolType::TypeName("ClientStore".to_string())],
-                return_type: SymbolType::Int64,
-            },
-            symbol_type: SymbolType::Int64,
+        // =====================================================================
+        // Mpc - MPC engine info (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut mpc_methods = HashMap::new();
+
+        // Mpc.party_id() -> int64
+        mpc_methods.insert("party_id".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.party_id".to_string(),
+        });
+
+        // Mpc.n_parties() -> int64
+        mpc_methods.insert("n_parties".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.n_parties".to_string(),
+        });
+
+        // Mpc.threshold() -> int64
+        mpc_methods.insert("threshold".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.threshold".to_string(),
+        });
+
+        // Mpc.is_ready() -> bool
+        mpc_methods.insert("is_ready".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Bool,
+            qualified_name: "Mpc.is_ready".to_string(),
+        });
+
+        // Mpc.instance_id() -> int64
+        mpc_methods.insert("instance_id".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Int64,
+            qualified_name: "Mpc.instance_id".to_string(),
+        });
+
+        self.builtin_objects.insert("Mpc".to_string(), BuiltinObjectInfo {
+            name: "Mpc".to_string(),
+            methods: mpc_methods,
+        });
+
+        let mpc_info = SymbolInfo {
+            name: "Mpc".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Mpc".to_string() },
+            symbol_type: SymbolType::Object("Mpc".to_string()),
             is_secret: false,
             defined_at: SourceLocation::default(),
         };
-        if let Err(e) = global_scope.declare(get_number_clients_info) {
+        if let Err(e) = global_scope.declare(mpc_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Rbc - Reliable Broadcast protocol (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut rbc_methods = HashMap::new();
+
+        // Rbc.broadcast(message: string) -> int64 (session_id)
+        rbc_methods.insert("broadcast".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::String],
+            return_type: SymbolType::Int64,
+            qualified_name: "Rbc.broadcast".to_string(),
+        });
+
+        // Rbc.receive(from_party: int64, timeout_ms: int64) -> string
+        rbc_methods.insert("receive".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::String,
+            qualified_name: "Rbc.receive".to_string(),
+        });
+
+        // Rbc.receive_any(timeout_ms: int64) -> Object (with party_id and message fields)
+        rbc_methods.insert("receive_any".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::Object("RbcResult".to_string()),
+            qualified_name: "Rbc.receive_any".to_string(),
+        });
+
+        self.builtin_objects.insert("Rbc".to_string(), BuiltinObjectInfo {
+            name: "Rbc".to_string(),
+            methods: rbc_methods,
+        });
+
+        let rbc_info = SymbolInfo {
+            name: "Rbc".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Rbc".to_string() },
+            symbol_type: SymbolType::Object("Rbc".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(rbc_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Aba - Asynchronous Binary Agreement protocol (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut aba_methods = HashMap::new();
+
+        // Aba.propose(value: bool) -> int64 (session_id)
+        aba_methods.insert("propose".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Bool],
+            return_type: SymbolType::Int64,
+            qualified_name: "Aba.propose".to_string(),
+        });
+
+        // Aba.result(session_id: int64, timeout_ms: int64) -> bool
+        aba_methods.insert("result".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Aba.result".to_string(),
+        });
+
+        // Aba.propose_and_wait(value: bool, timeout_ms: int64) -> bool
+        aba_methods.insert("propose_and_wait".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Bool, SymbolType::Int64],
+            return_type: SymbolType::Bool,
+            qualified_name: "Aba.propose_and_wait".to_string(),
+        });
+
+        self.builtin_objects.insert("Aba".to_string(), BuiltinObjectInfo {
+            name: "Aba".to_string(),
+            methods: aba_methods,
+        });
+
+        let aba_info = SymbolInfo {
+            name: "Aba".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Aba".to_string() },
+            symbol_type: SymbolType::Object("Aba".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(aba_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // ConsensusValue - Consensus value protocol (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut consensus_value_methods = HashMap::new();
+
+        // ConsensusValue.propose(value: int64) -> Object (session) (stubbed in VM)
+        consensus_value_methods.insert("propose".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::Object("ConsensusValueSession".to_string()),
+            qualified_name: "ConsensusValue.propose".to_string(),
+        });
+
+        // ConsensusValue.get(session, timeout_ms: int64) -> int64 (stubbed in VM)
+        consensus_value_methods.insert("get".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("ConsensusValueSession".to_string()), SymbolType::Int64],
+            return_type: SymbolType::Int64,
+            qualified_name: "ConsensusValue.get".to_string(),
+        });
+
+        self.builtin_objects.insert("ConsensusValue".to_string(), BuiltinObjectInfo {
+            name: "ConsensusValue".to_string(),
+            methods: consensus_value_methods,
+        });
+
+        let consensus_value_info = SymbolInfo {
+            name: "ConsensusValue".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "ConsensusValue".to_string() },
+            symbol_type: SymbolType::Object("ConsensusValue".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(consensus_value_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
@@ -326,6 +690,91 @@ impl SymbolTable {
              if let Err(e) = global_scope.declare(type_info) {
                  self.errors.push((e, SourceLocation::default()));
              }
+        }
+
+        // Array/Object manipulation builtins (from VM foreign functions)
+        let create_array_info = SymbolInfo {
+            name: "create_array".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![], // Optional capacity parameter
+                return_type: SymbolType::List(Box::new(SymbolType::Unknown)),
+            },
+            symbol_type: SymbolType::List(Box::new(SymbolType::Unknown)),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(create_array_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let create_object_info = SymbolInfo {
+            name: "create_object".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![],
+                return_type: SymbolType::Object("Object".to_string()),
+            },
+            symbol_type: SymbolType::Object("Object".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(create_object_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let get_field_info = SymbolInfo {
+            name: "get_field".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Unknown, SymbolType::Unknown],
+                return_type: SymbolType::Unknown,
+            },
+            symbol_type: SymbolType::Unknown,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(get_field_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let set_field_info = SymbolInfo {
+            name: "set_field".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Unknown, SymbolType::Unknown, SymbolType::Unknown],
+                return_type: SymbolType::Void,
+            },
+            symbol_type: SymbolType::Void,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(set_field_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let array_push_info = SymbolInfo {
+            name: "array_push".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(array_push_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let array_length_info = SymbolInfo {
+            name: "array_length".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(array_length_info) {
+            self.errors.push((e, SourceLocation::default()));
         }
 
         // Add more built-ins: len, assert, etc.
@@ -389,5 +838,239 @@ impl SymbolTable {
     /// Gets the current scope's ID.
     pub fn current_scope_id(&self) -> usize {
         self.current_scope_id
+    }
+
+    /// Returns all visible symbol names from current scope up the chain.
+    /// Handles shadowing (inner scope symbols take precedence over outer).
+    pub fn get_visible_symbol_names(&self) -> Vec<String> {
+        let mut symbols = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut scope_id = Some(self.current_scope_id);
+
+        while let Some(id) = scope_id {
+            let scope = &self.scopes[id];
+            for (name, _) in &scope.symbols {
+                if !seen.contains(name) {
+                    seen.insert(name.clone());
+                    symbols.push(name.clone());
+                }
+            }
+            scope_id = scope.parent_scope_id;
+        }
+        symbols
+    }
+
+    /// Returns all callable symbol names (functions + builtins + object methods).
+    pub fn get_callable_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.get_visible_symbol_names()
+            .into_iter()
+            .filter(|name| {
+                self.lookup_symbol(name)
+                    .map(|info| matches!(info.kind,
+                        SymbolKind::Function { .. } | SymbolKind::BuiltinFunction { .. }))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Add builtin object methods as "Object.method"
+        for (obj_name, obj_info) in &self.builtin_objects {
+            for method_name in obj_info.methods.keys() {
+                names.push(format!("{}.{}", obj_name, method_name));
+            }
+        }
+        names
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::SourceLocation;
+
+    fn make_loc() -> SourceLocation {
+        SourceLocation::default()
+    }
+
+    fn make_variable(name: &str, symbol_type: SymbolType) -> SymbolInfo {
+        SymbolInfo {
+            name: name.to_string(),
+            kind: SymbolKind::Variable { is_mutable: false },
+            symbol_type,
+            is_secret: false,
+            defined_at: make_loc(),
+        }
+    }
+
+    fn make_function(name: &str, params: Vec<SymbolType>, return_type: SymbolType) -> SymbolInfo {
+        SymbolInfo {
+            name: name.to_string(),
+            kind: SymbolKind::Function {
+                parameters: params,
+                return_type,
+            },
+            symbol_type: SymbolType::Void,
+            is_secret: false,
+            defined_at: make_loc(),
+        }
+    }
+
+    // ===========================================
+    // Tests for get_visible_symbol_names
+    // ===========================================
+
+    #[test]
+    fn test_get_visible_symbols_empty_scope() {
+        let table = SymbolTable::new();
+        // New table has builtins but no user symbols at global scope
+        let symbols = table.get_visible_symbol_names();
+        // Should include builtin functions like "print", "create_array", etc.
+        assert!(symbols.contains(&"print".to_string()));
+        assert!(symbols.contains(&"create_array".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_single_scope() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_variable("counter", SymbolType::Int64));
+        table.declare_symbol(make_variable("total", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+        assert!(symbols.contains(&"counter".to_string()));
+        assert!(symbols.contains(&"total".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_nested_scopes() {
+        let mut table = SymbolTable::new();
+
+        // Global scope
+        table.declare_symbol(make_variable("global_var", SymbolType::Int64));
+
+        // Enter function scope
+        table.enter_scope();
+        table.declare_symbol(make_variable("local_var", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+
+        // Should see both global and local
+        assert!(symbols.contains(&"global_var".to_string()));
+        assert!(symbols.contains(&"local_var".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_shadowing() {
+        let mut table = SymbolTable::new();
+
+        // Global scope - declare 'x'
+        table.declare_symbol(make_variable("x", SymbolType::Int64));
+        table.declare_symbol(make_variable("y", SymbolType::Int64));
+
+        // Enter inner scope - shadow 'x'
+        table.enter_scope();
+        table.declare_symbol(make_variable("x", SymbolType::String)); // shadows outer x
+        table.declare_symbol(make_variable("z", SymbolType::Int64));
+
+        let symbols = table.get_visible_symbol_names();
+
+        // Should see x, y, z (x only once due to shadowing)
+        let x_count = symbols.iter().filter(|s| *s == "x").count();
+        assert_eq!(x_count, 1, "Shadowed variable should appear only once");
+        assert!(symbols.contains(&"y".to_string()));
+        assert!(symbols.contains(&"z".to_string()));
+    }
+
+    #[test]
+    fn test_get_visible_symbols_after_exit_scope() {
+        let mut table = SymbolTable::new();
+
+        table.declare_symbol(make_variable("global_var", SymbolType::Int64));
+
+        table.enter_scope();
+        table.declare_symbol(make_variable("local_var", SymbolType::Int64));
+        table.exit_scope();
+
+        let symbols = table.get_visible_symbol_names();
+
+        // After exiting scope, local_var should not be visible
+        assert!(symbols.contains(&"global_var".to_string()));
+        assert!(!symbols.contains(&"local_var".to_string()));
+    }
+
+    // ===========================================
+    // Tests for get_callable_names
+    // ===========================================
+
+    #[test]
+    fn test_get_callable_names_includes_builtins() {
+        let table = SymbolTable::new();
+        let callables = table.get_callable_names();
+
+        // Should include builtin functions
+        assert!(callables.contains(&"print".to_string()));
+        assert!(callables.contains(&"create_array".to_string()));
+        assert!(callables.contains(&"array_push".to_string()));
+        assert!(callables.contains(&"array_length".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_includes_user_functions() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_function(
+            "calculate",
+            vec![SymbolType::Int64],
+            SymbolType::Int64,
+        ));
+        table.declare_symbol(make_function(
+            "process",
+            vec![SymbolType::String],
+            SymbolType::Void,
+        ));
+
+        let callables = table.get_callable_names();
+
+        assert!(callables.contains(&"calculate".to_string()));
+        assert!(callables.contains(&"process".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_excludes_variables() {
+        let mut table = SymbolTable::new();
+        table.declare_symbol(make_variable("my_var", SymbolType::Int64));
+        table.declare_symbol(make_function("my_func", vec![], SymbolType::Void));
+
+        let callables = table.get_callable_names();
+
+        assert!(!callables.contains(&"my_var".to_string()));
+        assert!(callables.contains(&"my_func".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_includes_builtin_object_methods() {
+        let table = SymbolTable::new();
+        let callables = table.get_callable_names();
+
+        // Should include builtin object methods as "Object.method"
+        assert!(callables.contains(&"Share.open".to_string()));
+        assert!(callables.contains(&"Share.mul".to_string()));
+        assert!(callables.contains(&"ClientStore.take_share".to_string()));
+        assert!(callables.contains(&"Mpc.party_id".to_string()));
+    }
+
+    #[test]
+    fn test_get_callable_names_nested_scope_functions() {
+        let mut table = SymbolTable::new();
+
+        // Global function
+        table.declare_symbol(make_function("global_func", vec![], SymbolType::Void));
+
+        // Enter scope and declare local function
+        table.enter_scope();
+        table.declare_symbol(make_function("local_func", vec![], SymbolType::Void));
+
+        let callables = table.get_callable_names();
+
+        // Should see both
+        assert!(callables.contains(&"global_func".to_string()));
+        assert!(callables.contains(&"local_func".to_string()));
     }
 }

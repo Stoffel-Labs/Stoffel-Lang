@@ -14,6 +14,7 @@ mod codegen;
 mod compiler;
 mod lexer;
 mod errors;
+mod optimizations;
 mod parser;
 mod symbol_table;
 mod semantic;
@@ -21,6 +22,8 @@ mod suggestions;
 mod ufcs;
 mod register_allocator;
 mod binary_converter;
+mod module_resolver;
+mod multi_file_compiler;
 
 /// Stoffel Language Compiler
 #[derive(ClapParser, Debug)]
@@ -140,14 +143,15 @@ fn main() {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
     let options = compiler::CompilerOptions {
-        optimize: args.optimize,
-        optimization_level: args.opt_level,
+        optimize: args.optimize || args.opt_level > 0,
+        optimization_level: if args.optimize { 2 } else { args.opt_level },
         print_ir: args.print_ir,
     };
 
     println!("Compiling {}...", filename);
 
-    match compiler::compile(&source, &file_name, &options) {
+    // Use compile_file to automatically handle multi-file projects with imports
+    match compiler::compile_file(file_path, &source, &options) {
         Ok(compiled_program) => {
             println!("Compilation successful!");
 

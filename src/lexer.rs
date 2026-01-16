@@ -67,9 +67,11 @@ fn get_keywords() -> HashMap<String, TokenKind> {
     keywords.insert("nil".to_string(), TokenKind::NilLiteral);
     keywords.insert("secret".to_string(), TokenKind::Keyword("secret".to_string())); // The special keyword
     keywords.insert("discard".to_string(), TokenKind::Keyword("discard".to_string()));
+    // Import system keywords
+    keywords.insert("import".to_string(), TokenKind::Keyword("import".to_string()));
+    keywords.insert("as".to_string(), TokenKind::Keyword("as".to_string()));
     // Note: 'let' intentionally not added as a keyword anymore. It will be tokenized
     // as an Identifier to allow targeted parse-time diagnostics and potential use as a name.
-    // Add more keywords as needed (e.g., and, or, not, is, as, import, from, export, etc.)
     keywords
 }
 
@@ -286,6 +288,17 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     iter.next();
                     push_token(TokenKind::Arrow, make_location(line, column));
                     column += 2;
+                } else if iter.peek() == Some(&'=') {
+                    // Compound assignment -= is not supported
+                    let location = make_location(line, column);
+                    iter.next(); // consume '='
+                    let snippet = extract_source_snippet(source, &location, 2);
+                    return Err(CompilerError::syntax_error(
+                        "Compound assignment operator '-=' is not supported",
+                        location
+                    )
+                    .with_snippet(snippet)
+                    .with_hint("Use 'x = x - y' instead of 'x -= y'"));
                 } else {
                     // Fallback to operator collection (e.g., '-', '->' handled above)
                     let start_col = column;
@@ -312,8 +325,28 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         break;
                     }
                 }
+
+                // Check for compound assignment operators (not supported)
+                if let Some(base_op) = match op.as_str() {
+                    "+=" => Some("+"),
+                    "-=" => Some("-"),
+                    "*=" => Some("*"),
+                    "/=" => Some("/"),
+                    "%=" => Some("%"),
+                    _ => None,
+                } {
+                    let location = make_location(line, start_col);
+                    let snippet = extract_source_snippet(source, &location, 2);
+                    return Err(CompilerError::syntax_error(
+                        format!("Compound assignment operator '{}' is not supported", op),
+                        location
+                    )
+                    .with_snippet(snippet)
+                    .with_hint(format!("Use 'x = x {} y' instead of 'x {} y'", base_op, op)));
+                }
+
                 column += op.len(); // Update column based on operator length
-                push_token(TokenKind::Operator(op), make_location(line, column));
+                push_token(TokenKind::Operator(op), make_location(line, start_col));
             }
             // Numbers (Int, Float)
             c if c.is_ascii_digit() => {
