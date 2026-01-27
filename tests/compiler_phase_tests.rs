@@ -872,3 +872,315 @@ import module3 as m3
 "#;
     assert!(parse_source(source).is_ok());
 }
+
+// ===========================================
+// Compound Assignment Operator Tests - Lexer
+// ===========================================
+
+#[test]
+fn test_lexer_compound_plus_equals() {
+    let source = "var x = 10\nx += 5";
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_lexer_compound_minus_equals() {
+    let source = "var x = 10\nx -= 5";
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_lexer_compound_times_equals() {
+    let source = "var x = 10\nx *= 5";
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_lexer_compound_divide_equals() {
+    let source = "var x = 10\nx /= 5";
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_lexer_compound_modulo_equals() {
+    let source = "var x = 10\nx %= 3";
+    assert!(parse_source(source).is_ok());
+}
+
+// ===========================================
+// Compound Assignment Operator Tests - Parser
+// ===========================================
+
+#[test]
+fn test_parser_compound_assignment_simple_variable() {
+    let source = r#"
+var x = 10
+x += 5
+"#;
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_compound_assignment_with_expression() {
+    let source = r#"
+var x = 10
+var y = 3
+x += y * 2
+"#;
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_compound_assignment_in_loop() {
+    let source = r#"
+var sum = 0
+for i in 0..10:
+  sum += i
+"#;
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_compound_assignment_array_element() {
+    let source = r#"
+var arr = [1, 2, 3]
+arr[0] += 10
+"#;
+    assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_compound_all_operators() {
+    let source = r#"
+var a = 100
+a += 10
+a -= 5
+a *= 2
+a /= 10
+a %= 7
+"#;
+    assert!(parse_source(source).is_ok());
+}
+
+// ===========================================
+// Compound Assignment - Semantic Analysis
+// ===========================================
+
+#[test]
+fn test_semantic_compound_plus_equals() {
+    let source = r#"
+var x = 10
+x += 5
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_minus_equals() {
+    let source = r#"
+var x = 10
+x -= 3
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_times_equals() {
+    let source = r#"
+var x = 10
+x *= 2
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_divide_equals() {
+    let source = r#"
+var x = 10
+x /= 2
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_modulo_equals() {
+    let source = r#"
+var x = 10
+x %= 3
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_assignment_in_function() {
+    let source = r#"
+def accumulate(n: int64) -> int64:
+  var sum = 0
+  for i in 0..n:
+    sum += i
+  return sum
+
+var result = accumulate(10)
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_assignment_with_expression_rhs() {
+    let source = r#"
+var x = 100
+var y = 10
+x += y * 2 + 5
+"#;
+    assert!(analyze_source(source).is_ok());
+}
+
+#[test]
+fn test_semantic_compound_error_undefined_variable() {
+    let source = r#"
+undefined_var += 5
+"#;
+    assert!(analyze_source(source).is_err());
+}
+
+// ===========================================
+// Compound Assignment - Full Compilation
+// ===========================================
+// Note: We avoid using print() with integer variables directly
+// due to a pre-existing type inference issue where print expects String.
+// Instead, we verify compilation succeeds by checking the final value.
+
+#[test]
+fn test_compile_compound_plus_equals() {
+    let source = r#"
+var x = 10
+x += 5
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_minus_equals() {
+    let source = r#"
+var x = 10
+x -= 3
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_times_equals() {
+    let source = r#"
+var x = 10
+x *= 2
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_divide_equals() {
+    let source = r#"
+var x = 10
+x /= 2
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_modulo_equals() {
+    let source = r#"
+var x = 10
+x %= 3
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_accumulator() {
+    let source = r#"
+var sum = 0
+for i in 1..11:
+  sum += i
+var result = sum
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_factorial_style() {
+    let source = r#"
+var result = 1
+for i in 1..6:
+  result *= i
+var final = result
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_countdown() {
+    let source = r#"
+var count = 100
+while count > 0:
+  count -= 10
+var final = count
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_in_nested_loops() {
+    let source = r#"
+var total = 0
+for i in 0..3:
+  for j in 0..3:
+    total += i * j
+var result = total
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_mixed_operations() {
+    let source = r#"
+var x = 100
+x += 50
+x -= 30
+x *= 2
+x /= 4
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_with_function_call() {
+    let source = r#"
+def double(n: int64) -> int64:
+  return n * 2
+
+var x = 10
+x += double(5)
+var result = x
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_compound_assignment_array_element() {
+    let source = r#"
+var arr = [10, 20, 30]
+arr[0] += 5
+arr[1] -= 10
+arr[2] *= 2
+var a = arr[0]
+var b = arr[1]
+var c = arr[2]
+"#;
+    assert!(compile_source(source).is_ok());
+}

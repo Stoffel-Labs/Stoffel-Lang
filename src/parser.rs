@@ -868,6 +868,42 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Check for compound assignment operators: +=, -=, *=, /=, %=
+        // These are desugared into: x = x op value
+        if let Some(TokenInfo { kind: TokenKind::Operator(op), location: op_location }) = self.current_token_info {
+            if let Some(base_op) = match op.as_str() {
+                "+=" => Some("+"),
+                "-=" => Some("-"),
+                "*=" => Some("*"),
+                "/=" => Some("/"),
+                "%=" => Some("%"),
+                _ => None,
+            } {
+                let op_location = op_location.clone();
+                self.advance(); // Consume the compound operator
+                let rhs = self.parse_expression()?;
+
+                // Expect newline, EOF, or Dedent after the statement
+                if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) {
+                    return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after compound assignment, found {:?}", self.current_token_info), self.get_location()));
+                }
+
+                // Desugar: x += y  =>  x = x + y
+                let binary_op = AstNode::BinaryOperation {
+                    op: base_op.to_string(),
+                    left: Box::new(expr.clone()),
+                    right: Box::new(rhs),
+                    location: op_location,
+                };
+
+                return Ok(AstNode::Assignment {
+                    target: Box::new(expr),
+                    value: Box::new(binary_op),
+                    location: start_location,
+                });
+            }
+        }
+
         // Could be assignment: expr = value
         if self.check(&TokenKind::Assign) {
             self.advance(); // Consume '='
