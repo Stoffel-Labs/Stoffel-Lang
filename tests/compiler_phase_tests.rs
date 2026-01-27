@@ -343,10 +343,11 @@ print(msg)
 #[test]
 fn test_semantic_array_operations() {
     // create_array takes no required parameters
+    // Note: 'len' is now a builtin function name, so we use 'arr_len' instead
     let source = r#"
 var arr = create_array()
 discard array_push(arr, 1)
-var len = array_length(arr)
+var arr_len = array_length(arr)
 "#;
     assert!(analyze_source(source).is_ok());
 }
@@ -1181,6 +1182,84 @@ arr[2] *= 2
 var a = arr[0]
 var b = arr[1]
 var c = arr[2]
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+// ===========================================
+// Pythonic Array Syntax Tests
+// ===========================================
+
+#[test]
+fn test_empty_array_literal() {
+    // Empty array literal [] is now supported (type inferred from context)
+    let source = r#"
+var items: List[int64] = []
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_array_literal_with_elements() {
+    let source = r#"
+var items = [1, 2, 3, 4, 5]
+var first = items[0]
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_array_append_method() {
+    // Pythonic .append() method syntax
+    let source = r#"
+var items: List[int64] = []
+items.append(1)
+items.append(2)
+items.append(3)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_array_push_method() {
+    // JavaScript-style .push() method syntax
+    let source = r#"
+var items = [1, 2]
+items.push(3)
+items.push(4)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_array_length_method() {
+    // Pythonic .length() method syntax
+    let source = r#"
+var items = [1, 2, 3, 4, 5]
+var n = items.length()
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_array_len_method() {
+    // Python-style .len() or len(arr) syntax
+    let source = r#"
+var items = [1, 2, 3, 4, 5]
+var n = len(items)
+var m = items.len()
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_pythonic_array_loop() {
+    // Complete Pythonic array workflow
+    let source = r#"
+var result: List[int64] = []
+for i in 1..6:
+  result.append(i * 10)
+var n = result.length()
 "#;
     assert!(compile_source(source).is_ok());
 }

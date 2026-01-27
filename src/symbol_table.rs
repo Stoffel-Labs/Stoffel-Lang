@@ -773,6 +773,36 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
+        // Add 'append' as Pythonic alias for array_push (enables arr.append(value) via UFCS)
+        let append_info = SymbolInfo {
+            name: "append".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(append_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Add 'push' as another alias for array_push (enables arr.push(value) via UFCS)
+        let push_info = SymbolInfo {
+            name: "push".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(push_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         let array_length_info = SymbolInfo {
             name: "array_length".to_string(),
             kind: SymbolKind::BuiltinFunction {
@@ -787,13 +817,38 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
-        // Register method-to-function suggestions for common method names.
-        // These help users who try to use method syntax by suggesting equivalent functions.
-        self.method_suggestions.insert("length".to_string(), "array_length(arr)".to_string());
-        self.method_suggestions.insert("len".to_string(), "array_length(arr)".to_string());
-        self.method_suggestions.insert("size".to_string(), "array_length(arr)".to_string());
-        self.method_suggestions.insert("append".to_string(), "array_push(arr, value)".to_string());
-        self.method_suggestions.insert("push".to_string(), "array_push(arr, value)".to_string());
+        // Add 'length' as Pythonic alias for array_length (enables arr.length() via UFCS)
+        let length_info = SymbolInfo {
+            name: "length".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(length_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Add 'len' as another alias for array_length (enables arr.len() or len(arr) via UFCS)
+        let len_info = SymbolInfo {
+            name: "len".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(len_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Note: Method-to-function suggestions are kept for methods that don't have
+        // direct function aliases (like pop, get, set) or have different semantics
         self.method_suggestions.insert("pop".to_string(), "array_pop(arr)".to_string());
         self.method_suggestions.insert("get".to_string(), "arr[index]".to_string());
         self.method_suggestions.insert("set".to_string(), "arr[index] = value".to_string());

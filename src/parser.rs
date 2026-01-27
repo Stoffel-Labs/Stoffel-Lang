@@ -1,4 +1,4 @@
-use crate::ast::{AstNode, Parameter, Pragma, Value};
+use crate::ast::{AstNode, FieldDefinition, Parameter, Pragma, Value};
 use crate::errors::{CompilerError, CompilerResult, SourceLocation};
 use std::iter::Peekable;
 use std::mem;
@@ -429,8 +429,7 @@ impl<'a> Parser<'a> {
         // Determine if it's object, enum, or type alias
         if self.check_keyword("object") {
             self.advance(); // Consume 'object'
-            // TODO: Parse object definition
-            Err(CompilerError::syntax_error("Object definition parsing not implemented", location))
+            self.parse_object_definition(is_secret, location)
         } else if self.check_keyword("enum") {
             self.advance(); // Consume 'enum'
             // TODO: Parse enum definition
@@ -442,6 +441,125 @@ impl<'a> Parser<'a> {
         } else {
             Err(CompilerError::syntax_error("Expected 'object', 'enum', or 'type' for type definition", location))
         }
+    }
+
+    /// Parses an object definition.
+    /// Syntax:
+    ///   object Name:
+    ///     field1: Type1
+    ///     field2: Type2
+    ///
+    /// Or with base type:
+    ///   object Name(BaseType):
+    ///     field1: Type1
+    fn parse_object_definition(&mut self, is_secret: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+        // Parse object name
+        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected object name after 'object'")?;
+        let name = match name_token {
+            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            _ => unreachable!(),
+        };
+
+        // Parse optional base type: object Name(BaseType):
+        let base_type = if self.check(&TokenKind::LParen) {
+            self.advance(); // Consume '('
+            let base = self.parse_type_annotation()?;
+            self.consume(&TokenKind::RParen, "Expected ')' after base type")?;
+            Some(Box::new(base))
+        } else {
+            None
+        };
+
+        // Expect ':' to start the body
+        self.consume(&TokenKind::Colon, "Expected ':' after object header")?;
+
+        // Parse the indented block of field definitions
+        let fields = self.parse_object_fields()?;
+
+        Ok(AstNode::ObjectDefinition {
+            name,
+            base_type,
+            fields,
+            is_secret,
+            location,
+        })
+    }
+
+    /// Parses the fields inside an object definition.
+    /// Each field is: field_name: Type
+    fn parse_object_fields(&mut self) -> CompilerResult<Vec<FieldDefinition>> {
+        let mut fields = Vec::new();
+
+        // Consume any newlines before the block
+        while self.check(&TokenKind::Newline) {
+            self.advance();
+        }
+
+        // Expect indent to start the block
+        if !self.check(&TokenKind::Indent) {
+            return Err(CompilerError::syntax_error(
+                "Expected indented block with field definitions after object header",
+                self.get_location(),
+            ));
+        }
+        self.advance(); // Consume Indent
+
+        // Parse field definitions until we see Dedent
+        loop {
+            // Skip any extra newlines
+            while self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+
+            // Check for end of block
+            if self.check(&TokenKind::Dedent) || self.check(&TokenKind::Eof) {
+                break;
+            }
+
+            // Check for 'secret' modifier on field
+            let field_is_secret = if self.check_keyword("secret") {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
+            // Parse field name
+            let field_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected field name")?;
+            let field_name = match field_name_token {
+                TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+                _ => unreachable!(),
+            };
+
+            // Expect ':' followed by type annotation
+            self.consume(&TokenKind::Colon, "Expected ':' after field name")?;
+            let field_type = self.parse_type_annotation()?;
+
+            fields.push(FieldDefinition {
+                name: field_name,
+                type_annotation: Box::new(field_type),
+                is_secret: field_is_secret,
+            });
+
+            // Consume newline after field definition
+            if self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+        }
+
+        // Consume the Dedent
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
+
+        if fields.is_empty() {
+            return Err(CompilerError::syntax_error(
+                "Object definition must have at least one field",
+                self.get_location(),
+            ));
+        }
+
+        Ok(fields)
     }
 
     fn parse_if_statement_or_expression(&mut self) -> CompilerResult<AstNode> {
@@ -691,8 +809,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::LBracket => {
-                // List literal: [elem1, elem2, ...]
-                let bracket_location = token_info.location.clone();
+                // List literal: [elem1, elem2, ...] or empty list []
                 let mut elements = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
                     loop {
@@ -705,14 +822,8 @@ impl<'a> Parser<'a> {
                 }
                 self.consume(&TokenKind::RBracket, "Expected ']' after list elements")?;
 
-                // Empty list literals are not supported
-                if elements.is_empty() {
-                    return Err(CompilerError::syntax_error(
-                        "Empty list literals '[]' are not supported",
-                        bracket_location
-                    ).with_hint("Use 'create_array()' to create an empty list"));
-                }
-
+                // Empty list literals [] are now supported
+                // Type will be inferred from context or explicit annotation
                 Ok(AstNode::ListLiteral(elements))
             }
             TokenKind::LBrace => {

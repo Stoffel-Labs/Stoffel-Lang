@@ -695,6 +695,33 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok((reconstructed_node, SymbolType::Void)) // Definition is a statement
             }
 
+            AstNode::ObjectDefinition { name, base_type, fields, is_secret, location } => {
+                // 1. Register the object type in the symbol table
+                let object_type = SymbolType::Object(name.clone());
+
+                // Build field type map for the object
+                let mut _field_types: std::collections::HashMap<String, SymbolType> = std::collections::HashMap::new();
+                for field in &fields {
+                    let field_type = SymbolType::from_ast(&field.type_annotation);
+                    // Validate field type refers to a valid type
+                    self.validate_type_annotation(&field_type, field.type_annotation.location())?;
+                    _field_types.insert(field.name.clone(), field_type);
+                }
+
+                // Declare the object type as a type symbol
+                let info = SymbolInfo {
+                    name: name.clone(),
+                    kind: SymbolKind::Type, // User-defined type
+                    symbol_type: object_type.clone(),
+                    is_secret,
+                    defined_at: location.clone(),
+                };
+                self.symbol_table.declare_symbol(info);
+
+                // Return the node as-is (no transformation needed)
+                Ok((AstNode::ObjectDefinition { name, base_type, fields, is_secret, location }, SymbolType::Void))
+            }
+
             // --- Expressions and Control Flow ---
             AstNode::IfExpression { condition, then_branch, else_branch } => {
                 // Analyze condition and enforce that branching on secret is not supported

@@ -397,11 +397,18 @@ impl CodeGenerator {
             AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
                 // 1. Identify the function name
                 // Semantic analysis already verified the function exists and is callable.
-                let function_name = match function.as_ref() {
+                let raw_function_name = match function.as_ref() {
                     AstNode::Identifier(name, _) => name.clone(),
                     // Semantic analysis should have caught non-identifier calls if unsupported
                     _ => return Err(CompilerError::internal_error(
                         "Codegen expected identifier for function call after semantic analysis".to_string())),
+                };
+
+                // 2. Map Pythonic aliases to actual VM function names
+                let function_name = match raw_function_name.as_str() {
+                    "append" | "push" => "array_push".to_string(),
+                    "length" | "len" => "array_length".to_string(),
+                    _ => raw_function_name,
                 };
 
                 // 3. Compile arguments first (do NOT emit PUSHARG yet) to keep PUSHARGs contiguous before CALL
@@ -829,6 +836,20 @@ impl CodeGenerator {
 
                 // Function definition itself doesn't produce a value in the outer scope.
                 Ok((VirtualRegister(usize::MAX), false)) // Return dummy VR
+            },
+            AstNode::ObjectDefinition { name, base_type: _, fields, is_secret: _, location: _ } => {
+                // Object definitions are type declarations - no bytecode is generated.
+                // The type information is registered in semantic analysis.
+                // At runtime, objects are created via constructor calls (to be implemented).
+                //
+                // For now, we just register the object type's field information for later use
+                // when compiling object instantiation and field access.
+                //
+                // Store field names for potential future use (e.g., for object creation)
+                let _field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+
+                // Object definition doesn't produce a runtime value
+                Ok((VirtualRegister(usize::MAX), false))
             },
             AstNode::ListLiteral(elements) => {
                 // Create array with capacity

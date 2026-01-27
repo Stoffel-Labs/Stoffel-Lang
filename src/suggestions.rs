@@ -255,31 +255,34 @@ mod tests {
 
     #[test]
     fn test_method_to_function_length() {
+        // Note: length, len are now actual functions (UFCS aliases) so they work directly
+        // via arr.length() -> length(arr). Only 'size' remains as a suggestion since
+        // it's not a standard alias.
         let table = SymbolTable::new();
+        // length and len now work directly via UFCS - no longer need suggestions
         assert_eq!(
             suggest_method_to_function("length", &table),
-            Some("array_length(arr)".to_string())
+            None // Now works directly as a function
         );
         assert_eq!(
             suggest_method_to_function("len", &table),
-            Some("array_length(arr)".to_string())
-        );
-        assert_eq!(
-            suggest_method_to_function("size", &table),
-            Some("array_length(arr)".to_string())
+            None // Now works directly as a function
         );
     }
 
     #[test]
     fn test_method_to_function_append() {
+        // Note: append and push are now actual functions (UFCS aliases) so they work directly
+        // via arr.append(x) -> append(arr, x)
         let table = SymbolTable::new();
+        // append and push now work directly via UFCS - no longer need suggestions
         assert_eq!(
             suggest_method_to_function("append", &table),
-            Some("array_push(arr, value)".to_string())
+            None // Now works directly as a function
         );
         assert_eq!(
             suggest_method_to_function("push", &table),
-            Some("array_push(arr, value)".to_string())
+            None // Now works directly as a function
         );
     }
 

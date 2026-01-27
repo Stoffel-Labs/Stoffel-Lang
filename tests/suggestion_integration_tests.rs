@@ -123,11 +123,13 @@ main main() -> nil:
 }
 
 // ===========================================
-// Method-style call suggestions
+// Method-style call tests (now supported via UFCS)
 // ===========================================
 
 #[test]
 fn test_method_append_suggests_array_push() {
+    // Note: .append() now works via UFCS as an alias for array_push
+    // This test now verifies that the Pythonic syntax compiles successfully
     let source = r#"
 main main() -> nil:
   var items: List[int64] = create_array()
@@ -135,12 +137,14 @@ main main() -> nil:
 "#;
 
     let errors = compile_and_get_errors(source);
-    assert!(errors_contain(&errors, "append"), "Should mention 'append'");
-    assert!(errors_contain(&errors, "array_push"), "Should suggest 'array_push'");
+    // Should compile without errors now that append is a builtin alias
+    assert!(errors.is_empty(), "Pythonic .append() should now compile successfully");
 }
 
 #[test]
 fn test_method_length_suggests_array_length() {
+    // Note: .length() now works via UFCS as an alias for array_length
+    // This test now verifies that the Pythonic syntax compiles successfully
     let source = r#"
 main main() -> nil:
   var items: List[int64] = create_array()
@@ -148,8 +152,8 @@ main main() -> nil:
 "#;
 
     let errors = compile_and_get_errors(source);
-    assert!(errors_contain(&errors, "length"), "Should mention 'length'");
-    assert!(errors_contain(&errors, "array_length"), "Should suggest 'array_length'");
+    // Should compile without errors now that length is a builtin alias
+    assert!(errors.is_empty(), "Pythonic .length() should now compile successfully");
 }
 
 #[test]
