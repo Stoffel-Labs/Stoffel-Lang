@@ -1,6 +1,0 @@
-# Main file with nested imports
-import level1.mid
-
-main main() -> int64:
-  var result = mid_compute()
-  return result

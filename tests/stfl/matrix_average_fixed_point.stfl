@@ -21,7 +21,7 @@
 
 # Computes element-wise federated average across all clients
 # Returns: an array of per-element averages (as floats, still fixed-point scaled)
-def federated_average_2x3() -> list[float]:
+def federated_average_2x3() -> List[float]:
   # Matrix size: 2x3 = 6 elements per client
   var matrix_size: int64 = 6
 
@@ -29,7 +29,7 @@ def federated_average_2x3() -> list[float]:
   var num_clients: int64 = ClientStore.get_number_clients()
 
   # Create result array to store averaged values
-  var result: list[float] = create_array()
+  var result: List[float] = create_array()
 
   # Process each element position
   var elem_idx: int64 = 0
@@ -61,8 +61,8 @@ def federated_average_2x3() -> list[float]:
   return result
 
 # Entry point - returns the array of per-element averages
-main main() -> list[float]:
-  var averages: list[float] = federated_average_2x3()
+main main() -> List[float]:
+  var averages: List[float] = federated_average_2x3()
 
   # The averages array contains per-element averages:
   # averages[i] = average of element i across all clients

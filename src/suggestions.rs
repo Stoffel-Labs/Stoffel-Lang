@@ -1,5 +1,4 @@
 use edit_distance::edit_distance;
-use std::collections::HashMap;
 
 use crate::symbol_table::SymbolTable;
 
@@ -45,20 +44,9 @@ pub fn suggest_function_from_symbols(misspelled: &str, symbol_table: &SymbolTabl
 
 /// Suggests the function equivalent for common method-style calls.
 /// Stoffel-Lang uses functions instead of methods for collection operations.
-pub fn suggest_method_to_function(method: &str) -> Option<String> {
-    let replacements = HashMap::from([
-        ("length", "array_length(arr)"),
-        ("len", "array_length(arr)"),
-        ("size", "array_length(arr)"),
-        ("append", "array_push(arr, value)"),
-        ("push", "array_push(arr, value)"),
-        ("pop", "array_pop(arr)"),
-        ("get", "arr[index]"),
-        ("set", "arr[index] = value"),
-        ("reveal", "assign to a clear (non-secret) variable to implicitly reveal"),
-        ("open", "Share.open(value) or assign to clear variable"),
-    ]);
-    replacements.get(method).map(|s| s.to_string())
+/// Uses the method suggestions registered in the symbol table.
+pub fn suggest_method_to_function(method: &str, symbol_table: &SymbolTable) -> Option<String> {
+    symbol_table.get_method_suggestion(method).cloned()
 }
 
 #[cfg(test)]
@@ -267,50 +255,58 @@ mod tests {
 
     #[test]
     fn test_method_to_function_length() {
+        // Note: length, len are now actual functions (UFCS aliases) so they work directly
+        // via arr.length() -> length(arr). Only 'size' remains as a suggestion since
+        // it's not a standard alias.
+        let table = SymbolTable::new();
+        // length and len now work directly via UFCS - no longer need suggestions
         assert_eq!(
-            suggest_method_to_function("length"),
-            Some("array_length(arr)".to_string())
+            suggest_method_to_function("length", &table),
+            None // Now works directly as a function
         );
         assert_eq!(
-            suggest_method_to_function("len"),
-            Some("array_length(arr)".to_string())
-        );
-        assert_eq!(
-            suggest_method_to_function("size"),
-            Some("array_length(arr)".to_string())
+            suggest_method_to_function("len", &table),
+            None // Now works directly as a function
         );
     }
 
     #[test]
     fn test_method_to_function_append() {
+        // Note: append and push are now actual functions (UFCS aliases) so they work directly
+        // via arr.append(x) -> append(arr, x)
+        let table = SymbolTable::new();
+        // append and push now work directly via UFCS - no longer need suggestions
         assert_eq!(
-            suggest_method_to_function("append"),
-            Some("array_push(arr, value)".to_string())
+            suggest_method_to_function("append", &table),
+            None // Now works directly as a function
         );
         assert_eq!(
-            suggest_method_to_function("push"),
-            Some("array_push(arr, value)".to_string())
+            suggest_method_to_function("push", &table),
+            None // Now works directly as a function
         );
     }
 
     #[test]
     fn test_method_to_function_pop() {
+        let table = SymbolTable::new();
         assert_eq!(
-            suggest_method_to_function("pop"),
+            suggest_method_to_function("pop", &table),
             Some("array_pop(arr)".to_string())
         );
     }
 
     #[test]
     fn test_method_to_function_reveal() {
-        let result = suggest_method_to_function("reveal");
+        let table = SymbolTable::new();
+        let result = suggest_method_to_function("reveal", &table);
         assert!(result.is_some());
         assert!(result.unwrap().contains("clear"));
     }
 
     #[test]
     fn test_method_to_function_unknown() {
-        assert_eq!(suggest_method_to_function("unknown_method"), None);
-        assert_eq!(suggest_method_to_function("foo"), None);
+        let table = SymbolTable::new();
+        assert_eq!(suggest_method_to_function("unknown_method", &table), None);
+        assert_eq!(suggest_method_to_function("foo", &table), None);
     }
 }
