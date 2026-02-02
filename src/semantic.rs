@@ -279,13 +279,12 @@ impl<'a> SemanticAnalyzer<'a> {
                     defined_at: location.clone(),
                 };
 
-                // Declare the function symbol ONLY if it's NOT a builtin
-                if !is_builtin {
-                    self.symbol_table.declare_symbol(info);
-                }
+                // Declare the function symbol (including builtins - they need to be callable)
+                self.symbol_table.declare_symbol(info);
 
                 // --- Analyze function body in a new scope ---
-                if !is_builtin { // Also skip body analysis for builtins
+                // Skip body analysis for builtins (they have no body)
+                if !is_builtin {
                     let original_scope_id = self.symbol_table.current_scope_id(); // Should be outer scope
                     self.symbol_table.enter_scope();
                     // Declare parameters within the function's scope
@@ -627,20 +626,18 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
 
                 // 2. Declare the function symbol in the *current* (outer) scope
-                //    (Unless it's a builtin, builtins are pre-declared)
-                if !is_builtin {
-                    let info = SymbolInfo {
-                        name: func_name.clone(),
-                        kind: SymbolKind::Function {
-                            parameters: param_types.clone(),
-                            return_type: final_return_type.clone(),
-                        },
-                        symbol_type: final_return_type.clone(), // Type of symbol is its return type
-                        is_secret: is_secret || final_return_type.is_secret(),
-                        defined_at: location.clone(),
-                    };
-                    self.symbol_table.declare_symbol(info);
-                }
+                //    (Including builtins - they need to be callable)
+                let info = SymbolInfo {
+                    name: func_name.clone(),
+                    kind: SymbolKind::Function {
+                        parameters: param_types.clone(),
+                        return_type: final_return_type.clone(),
+                    },
+                    symbol_type: final_return_type.clone(), // Type of symbol is its return type
+                    is_secret: is_secret || final_return_type.is_secret(),
+                    defined_at: location.clone(),
+                };
+                self.symbol_table.declare_symbol(info);
 
                 // 3. Analyze function body in a new scope (if not builtin)
                 let checked_body = if !is_builtin {
