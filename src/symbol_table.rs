@@ -789,6 +789,198 @@ impl SymbolTable {
         }
 
         // Add more built-ins: len, assert, etc.
+
+        // =====================================================================
+        // VM Cryptographic Builtins - Ristretto Elliptic Curve Operations
+        // =====================================================================
+
+        // Ristretto_add(string, string) -> string
+        let ristretto_add_info = SymbolInfo {
+            name: "Ristretto_add".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::String],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_add_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Ristretto_sub(string, string) -> string
+        let ristretto_sub_info = SymbolInfo {
+            name: "Ristretto_sub".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::String],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_sub_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Ristretto_mul(string, string) -> string
+        let ristretto_mul_info = SymbolInfo {
+            name: "Ristretto_mul".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::String],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_mul_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Ristretto_mul_int(string, int64) -> string
+        let ristretto_mul_int_info = SymbolInfo {
+            name: "Ristretto_mul_int".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::Int64],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_mul_int_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Ristretto_identity() -> string
+        let ristretto_identity_info = SymbolInfo {
+            name: "Ristretto_identity".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_identity_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Ristretto_discrete_log(string, int64) -> int64
+        let ristretto_discrete_log_info = SymbolInfo {
+            name: "Ristretto_discrete_log".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::Int64],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(ristretto_discrete_log_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // VM Cryptographic Builtins - Scalar Operations
+        // =====================================================================
+
+        // Scalar_lagrange_simple(int64, int64) -> string
+        let scalar_lagrange_simple_info = SymbolInfo {
+            name: "Scalar_lagrange_simple".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Int64, SymbolType::Int64],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(scalar_lagrange_simple_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // VM Utility Builtins - Byte/Binary Operations
+        // =====================================================================
+
+        // int_to_bytes(int64) -> string
+        let int_to_bytes_info = SymbolInfo {
+            name: "int_to_bytes".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Int64],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(int_to_bytes_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // bytes_to_int(string) -> int64
+        let bytes_to_int_info = SymbolInfo {
+            name: "bytes_to_int".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(bytes_to_int_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // concat_bytes(string, string) -> string
+        let concat_bytes_info = SymbolInfo {
+            name: "concat_bytes".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::String],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(concat_bytes_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // bytes_slice(string, int64, int64) -> string
+        let bytes_slice_info = SymbolInfo {
+            name: "bytes_slice".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::Int64, SymbolType::Int64],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(bytes_slice_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // hash_sha256(string) -> string
+        let hash_sha256_info = SymbolInfo {
+            name: "hash_sha256".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(hash_sha256_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
     }
 
     /// Enters a new scope nested within the current one.
