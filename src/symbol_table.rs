@@ -345,6 +345,17 @@ impl SymbolTable {
             return_type: SymbolType::Int64,
             qualified_name: "ClientStore.get_number_clients".to_string(),
         });
+        // Public input retrieval (non-secret)
+        client_store_methods.insert("take_bytes".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::String, // bytes represented as string until native bytes type
+            qualified_name: "ClientStore.take_bytes".to_string(),
+        });
+        client_store_methods.insert("take_int".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::Int64,
+            qualified_name: "ClientStore.take_int".to_string(),
+        });
 
         // Register the builtin object
         self.builtin_objects.insert("ClientStore".to_string(), BuiltinObjectInfo {
