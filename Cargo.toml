@@ -10,7 +10,7 @@ name = "stoffellang"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-stoffel-vm-types = { version = "0.1.0", git = "https://github.com/Stoffel-Labs/StoffelVM.git", branch = "runner" }
+stoffel-vm-types = { version = "0.1.0", git = "https://github.com/Stoffel-Labs/StoffelVM.git"}
 colored = "3.0.0"
 edit-distance = "2.1.0"
 clap = { version = "4.5.4", features = ["derive"] }
