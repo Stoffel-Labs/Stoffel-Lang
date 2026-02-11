@@ -351,10 +351,14 @@ fn estimate_register_count(chunk: &BytecodeChunk) -> usize {
         }
     }
 
-    let clear_count = max_clear.map_or(0, |m| m + 1);
-    let secret_count = max_secret_abs.map_or(0, |m| (m - SECRET_REGISTER_START) + 1);
+    // Return the maximum absolute physical register index + 1
+    // This ensures StoffelVM allocates enough slots for both clear and secret registers
+    // Since secret registers use absolute indices (16-31), we need the absolute max, not the sum
+    let max_physical = max_secret_abs
+        .unwrap_or(0)
+        .max(max_clear.unwrap_or(0));
 
-    clear_count + secret_count
+    max_physical + 1
 }
 
 /// Saves a `CompiledBinary` to a file
