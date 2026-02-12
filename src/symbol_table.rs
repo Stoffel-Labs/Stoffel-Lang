@@ -1,6 +1,7 @@
 use crate::ast::AstNode;
 use crate::errors::SourceLocation;
 use std::collections::HashMap;
+use std::fmt;
 
 /// Represents the kind of a symbol (variable, function, type, etc.)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,6 +61,7 @@ pub enum SymbolType {
     List(Box<SymbolType>),                    // List[T]
     Dict(Box<SymbolType>, Box<SymbolType>),   // Dict[K, V]
     Object(String),                            // Named object type
+    Generic(String, Vec<SymbolType>),          // Generic type: Name[T1, T2, ...]
 }
 
 impl SymbolType {
@@ -207,7 +209,47 @@ impl SymbolType {
                     Box::new(SymbolType::from_ast(value_type))
                 )
             }
+            AstNode::GenericType { base_name, type_params, .. } => {
+                let params: Vec<SymbolType> = type_params.iter().map(SymbolType::from_ast).collect();
+                SymbolType::Generic(base_name.clone(), params)
+            }
             _ => SymbolType::Unknown, // Cannot determine type from this node
+        }
+    }
+}
+
+impl fmt::Display for SymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymbolType::Int64 => write!(f, "int64"),
+            SymbolType::Int32 => write!(f, "int32"),
+            SymbolType::Int16 => write!(f, "int16"),
+            SymbolType::Int8 => write!(f, "int8"),
+            SymbolType::UInt64 => write!(f, "uint64"),
+            SymbolType::UInt32 => write!(f, "uint32"),
+            SymbolType::UInt16 => write!(f, "uint16"),
+            SymbolType::UInt8 => write!(f, "uint8"),
+            SymbolType::Float => write!(f, "float"),
+            SymbolType::String => write!(f, "string"),
+            SymbolType::Bool => write!(f, "bool"),
+            SymbolType::Nil => write!(f, "nil"),
+            SymbolType::Void => write!(f, "void"),
+            SymbolType::Secret(inner) => write!(f, "secret {}", inner),
+            SymbolType::TypeName(name) => write!(f, "{}", name),
+            SymbolType::Unknown => write!(f, "<unknown>"),
+            SymbolType::List(elem) => write!(f, "List[{}]", elem),
+            SymbolType::Dict(key, val) => write!(f, "Dict[{}, {}]", key, val),
+            SymbolType::Object(name) => write!(f, "{}", name),
+            SymbolType::Generic(name, params) => {
+                write!(f, "{}[", name)?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

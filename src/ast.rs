@@ -156,6 +156,11 @@ pub enum AstNode {
         value_type: Box<AstNode>,
         location: SourceLocation,
     },
+    GenericType {
+        base_name: String,
+        type_params: Vec<AstNode>,
+        location: SourceLocation,
+    },
     ForLoop {
         variables: Vec<String>,
         iterable: Box<AstNode>,
@@ -207,6 +212,7 @@ impl AstNode {
                 | AstNode::SecretType(_)
                 | AstNode::ListType(_)
                 | AstNode::DictType { .. }
+                | AstNode::GenericType { .. }
                 | AstNode::FieldAccess { .. }
         )
     }
@@ -229,7 +235,7 @@ impl AstNode {
             AstNode::ObjectDefinition { .. } | AstNode::EnumDefinition { .. } => false,
             AstNode::TryCatch { .. } => false,
             AstNode::NamedArgument { .. } => false,
-            AstNode::FunctionType { .. } | AstNode::TupleType(_) | AstNode::ListType(_) | AstNode::DictType { .. } => false,
+            AstNode::FunctionType { .. } | AstNode::TupleType(_) | AstNode::ListType(_) | AstNode::DictType { .. } | AstNode::GenericType { .. } => false,
             AstNode::DiscardStatement { .. } => false,
             &AstNode::SecretType(_) => todo!(),
         }
@@ -253,6 +259,7 @@ impl AstNode {
             AstNode::EnumDefinition { location: loc, .. } => loc.clone(),
             AstNode::FunctionType { location: loc, .. } => loc.clone(),
             AstNode::DictType { location: loc, .. } => loc.clone(),
+            AstNode::GenericType { location: loc, .. } => loc.clone(),
             AstNode::ForLoop { location: loc, .. } => loc.clone(),
             AstNode::TryCatch { location: loc, .. } => loc.clone(),
             AstNode::Import { location: loc, .. } => loc.clone(),

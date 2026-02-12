@@ -83,6 +83,12 @@ impl<'a> SemanticAnalyzer<'a> {
             (SymbolType::Dict(src_k, src_v), SymbolType::Dict(dst_k, dst_v)) => {
                 Self::types_compatible(src_k, dst_k) && Self::types_compatible(src_v, dst_v)
             }
+            // Generic types: compatible if name matches and all params are compatible
+            (SymbolType::Generic(src_name, src_params), SymbolType::Generic(dst_name, dst_params)) => {
+                src_name == dst_name
+                    && src_params.len() == dst_params.len()
+                    && src_params.iter().zip(dst_params.iter()).all(|(s, d)| Self::types_compatible(s, d))
+            }
             // Secret types: compare underlying types
             (SymbolType::Secret(src_inner), SymbolType::Secret(dst_inner)) => {
                 Self::types_compatible(src_inner, dst_inner)
@@ -1339,6 +1345,15 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.validate_type_annotation(val, location)
             }
             SymbolType::Secret(inner) => self.validate_type_annotation(inner, location),
+            SymbolType::Generic(name, params) => {
+                // Validate the base name as a TypeName
+                self.validate_type_annotation(&SymbolType::TypeName(name.clone()), location.clone())?;
+                // Validate each type parameter
+                for param in params {
+                    self.validate_type_annotation(param, location.clone())?;
+                }
+                Ok(())
+            }
             // All other types are primitives or Unknown - valid
             _ => Ok(()),
         }
@@ -1371,6 +1386,10 @@ fn declared_type_to_string(sym_type: &SymbolType) -> String {
         SymbolType::List(elem) => format!("List[{}]", declared_type_to_string(elem)),
         SymbolType::Dict(key, val) => format!("Dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
         SymbolType::Object(name) => name.clone(),
+        SymbolType::Generic(name, params) => {
+            let params_str: Vec<String> = params.iter().map(|p| declared_type_to_string(p)).collect();
+            format!("{}[{}]", name, params_str.join(", "))
+        }
     }
 }
 
