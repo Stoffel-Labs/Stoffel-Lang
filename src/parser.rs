@@ -1077,18 +1077,34 @@ impl<'a> Parser<'a> {
                             }
                         }
                         _ => {
-                            // Check if this is a capitalization error
-                            let hint = if base_name == "list" {
-                                "Did you mean 'List'? Generic types use PascalCase".to_string()
+                            // Check if this is a capitalization error for List/Dict
+                            if base_name == "list" {
+                                return Err(CompilerError::syntax_error(
+                                    format!("Unknown generic type: {}", base_name),
+                                    type_location,
+                                ).with_hint("Did you mean 'List'? Generic types use PascalCase"));
                             } else if base_name == "dict" {
-                                "Did you mean 'Dict'? Generic types use PascalCase".to_string()
-                            } else {
-                                "Supported generic types are: List[T], Dict[K, V]".to_string()
-                            };
-                            return Err(CompilerError::syntax_error(
-                                format!("Unknown generic type: {}", base_name),
-                                type_location,
-                            ).with_hint(hint));
+                                return Err(CompilerError::syntax_error(
+                                    format!("Unknown generic type: {}", base_name),
+                                    type_location,
+                                ).with_hint("Did you mean 'Dict'? Generic types use PascalCase"));
+                            }
+
+                            // General generic type: Name[T1, T2, ...]
+                            let mut type_params = Vec::new();
+                            loop {
+                                type_params.push(self.parse_type_annotation()?);
+                                if self.check(&TokenKind::RBracket) {
+                                    break;
+                                }
+                                self.consume(&TokenKind::Comma, "Expected ',' between type parameters")?;
+                            }
+                            self.consume(&TokenKind::RBracket, "Expected ']' after type parameters")?;
+                            AstNode::GenericType {
+                                base_name,
+                                type_params,
+                                location: type_location.clone(),
+                            }
                         }
                     }
                 } else {
