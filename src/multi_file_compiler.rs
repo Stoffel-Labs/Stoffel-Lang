@@ -283,10 +283,18 @@ impl MultiFileCompiler {
         // Add all other modules' function chunks
         for (module_key, compiled) in &self.compiled_modules {
             if module_key != entry_module {
-                // Prefix function names with module path to avoid collisions
+                // Prefix function names with module path to avoid collisions,
+                // and also provide unqualified aliases for CALL instructions.
                 for (func_name, chunk) in &compiled.program.function_chunks {
                     let qualified_name = format!("{}.{}", module_key, func_name);
+                    // Always insert the qualified name
                     linked.function_chunks.insert(qualified_name, chunk.clone());
+
+                    // Insert an unqualified alias only if it does not already exist.
+                    // This preserves entry-module definitions and avoids silent overwrites.
+                    if !linked.function_chunks.contains_key(func_name) {
+                        linked.function_chunks.insert(func_name.clone(), chunk.clone());
+                    }
                 }
             }
         }

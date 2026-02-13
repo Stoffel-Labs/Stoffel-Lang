@@ -660,8 +660,10 @@ impl CodeGenerator {
                         self.emit(Instruction::LDI(zero_vr.0, crate::core_types::Value::from(Constant::I64(0))));
                         self.emit(Instruction::MOV(index_vr.0, zero_vr.0));
 
-                        // Allocate the loop element variable
-                        let elem_vr = self.allocate_virtual_register(collection_is_secret);
+                        // Allocate the loop element variable.
+                        // Note: element secrecy may differ from collection secrecy (e.g., List[secret T]).
+                        // Conservatively treat loop elements as secret to avoid accidental declassification.
+                        let elem_vr = self.allocate_virtual_register(true);
 
                         // Insert loop variable (element) into symbol table
                         let prev_binding = self.symbol_table.insert(var_name.clone(), elem_vr.0);

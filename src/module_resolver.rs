@@ -133,14 +133,7 @@ impl DependencyGraph {
             in_degree.insert(module.as_str(), 0);
         }
 
-        for deps in self.edges.values() {
-            for dep in deps {
-                // This counts how many times a module is imported (not what we want)
-                // We want: how many modules does this module import
-            }
-        }
-
-        // Recalculate: in-degree = number of imports (dependencies this module has)
+        // Calculate in-degree as number of imports (dependencies this module has)
         for module in &self.modules {
             let num_deps = self.edges.get(module.as_str()).map(|d| d.len()).unwrap_or(0);
             in_degree.insert(module.as_str(), num_deps);

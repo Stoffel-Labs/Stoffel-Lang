@@ -708,7 +708,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 // Build field type map for the object
                 let mut _field_types: std::collections::HashMap<String, SymbolType> = std::collections::HashMap::new();
                 for field in &fields {
-                    let field_type = SymbolType::from_ast(&field.type_annotation);
+                    let mut field_type = SymbolType::from_ast(&field.type_annotation);
+                    // Apply the `secret` modifier from field definition
+                    if field.is_secret && !field_type.is_secret() {
+                        field_type = SymbolType::Secret(Box::new(field_type));
+                    }
                     // Validate field type refers to a valid type
                     self.validate_type_annotation(&field_type, field.type_annotation.location())?;
                     _field_types.insert(field.name.clone(), field_type);
@@ -829,8 +833,11 @@ impl<'a> SemanticAnalyzer<'a> {
                     _ => {
                         match iter_type.underlying_type() {
                             SymbolType::List(elem_type) => {
-                                let is_secret = matches!(iter_type, SymbolType::Secret(_));
-                                (elem_type.as_ref().clone(), is_secret)
+                                // Derive secrecy from the element (loop variable) type,
+                                // not from the iterable's top-level type.
+                                let elem_ty = elem_type.as_ref().clone();
+                                let is_secret = elem_ty.is_secret();
+                                (elem_ty, is_secret)
                             }
                             SymbolType::String => {
                                 // Iterating over a string yields characters (as strings)
@@ -963,23 +970,57 @@ impl<'a> SemanticAnalyzer<'a> {
                             return Err(());
                         }
                     }
-                    // Handle method-style calls that should be function calls
-                    AstNode::FieldAccess { field_name, location: field_loc, .. } => {
-                        // Check if this is a common method that should be a function
-                        if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
-                            self.error_reporter.add_error(
-                                CompilerError::semantic_error(
-                                    format!("Method '.{}()' is not supported", field_name),
+                    // Handle field access: could be a qualified function call (module.func)
+                    // or an unsupported method-style call (obj.method)
+                    AstNode::FieldAccess { object, field_name, location: field_loc } => {
+                        // Try to resolve as a qualified function call (e.g., module.func)
+                        if let AstNode::Identifier(obj_name, _) = object.as_ref() {
+                            let qualified_name = format!("{}.{}", obj_name, field_name);
+                            if let Some(info) = self.symbol_table.lookup_symbol(&qualified_name) {
+                                match &info.kind {
+                                    SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
+                                        (qualified_name, parameters.clone(), return_type.clone())
+                                    }
+                                    _ => {
+                                        self.error_reporter.add_error(CompilerError::type_error(
+                                            format!("'{}' is not a function", qualified_name),
+                                            field_loc.clone(),
+                                        ));
+                                        return Err(());
+                                    }
+                                }
+                            } else if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
+                                self.error_reporter.add_error(
+                                    CompilerError::semantic_error(
+                                        format!("Method '.{}()' is not supported", field_name),
+                                        field_loc.clone(),
+                                    ).with_hint(format!("Use {} instead", suggestion))
+                                );
+                                return Err(());
+                            } else {
+                                self.error_reporter.add_error(CompilerError::type_error(
+                                    format!("Method calls like '.{}()' are not supported", field_name),
                                     field_loc.clone(),
-                                ).with_hint(format!("Use {} instead", suggestion))
-                            );
+                                ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                                return Err(());
+                            }
                         } else {
-                            self.error_reporter.add_error(CompilerError::type_error(
-                                format!("Method calls like '.{}()' are not supported", field_name),
-                                field_loc.clone(),
-                            ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                            // Object is not a simple identifier — unsupported method call
+                            if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
+                                self.error_reporter.add_error(
+                                    CompilerError::semantic_error(
+                                        format!("Method '.{}()' is not supported", field_name),
+                                        field_loc.clone(),
+                                    ).with_hint(format!("Use {} instead", suggestion))
+                                );
+                            } else {
+                                self.error_reporter.add_error(CompilerError::type_error(
+                                    format!("Method calls like '.{}()' are not supported", field_name),
+                                    field_loc.clone(),
+                                ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                            }
+                            return Err(());
                         }
-                        return Err(());
                     }
                     // Other non-callable expressions
                     _ => {
