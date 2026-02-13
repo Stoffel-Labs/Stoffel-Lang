@@ -8,7 +8,7 @@ use stoffellang::compiler::{compile_file, CompilerOptions};
 
 fn get_test_path(relative_path: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests/imports");
+    path.push("tests/stfl/imports");
     path.push(relative_path);
     path
 }

@@ -397,11 +397,18 @@ impl CodeGenerator {
             AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
                 // 1. Identify the function name
                 // Semantic analysis already verified the function exists and is callable.
-                let function_name = match function.as_ref() {
+                let raw_function_name = match function.as_ref() {
                     AstNode::Identifier(name, _) => name.clone(),
                     // Semantic analysis should have caught non-identifier calls if unsupported
                     _ => return Err(CompilerError::internal_error(
                         "Codegen expected identifier for function call after semantic analysis".to_string())),
+                };
+
+                // 2. Map Pythonic aliases to actual VM function names
+                let function_name = match raw_function_name.as_str() {
+                    "append" | "push" => "array_push".to_string(),
+                    "length" | "len" => "array_length".to_string(),
+                    _ => raw_function_name,
                 };
 
                 // 3. Compile arguments first (do NOT emit PUSHARG yet) to keep PUSHARGs contiguous before CALL
@@ -574,68 +581,138 @@ impl CodeGenerator {
                 Ok((nil_vr, false))
             },
             AstNode::ForLoop { variables, iterable, body, location } => {
-                // Support: single var over range a .. b (inclusive), clear values only.
+                // Support: single var over range a .. b (inclusive) or over a list/array
                 if variables.len() != 1 {
                     return Err(CompilerError::semantic_error("For-loop with multiple variables not supported yet", location.clone()));
                 }
-                // Expect iterable to be a range binary operation
-                let (start_expr, end_expr) = match iterable.as_ref() {
-                    AstNode::BinaryOperation { op, left, right, location: _ } if op == ".." => (left, right),
-                    _ => {
-                        return Err(CompilerError::semantic_error("Unsupported for-loop iterable; expected 'a .. b' range", iterable.location()));
-                    }
-                };
 
-                // Compile start and end expressions
-                let (start_vr, start_is_secret) = self.compile_node(start_expr)?;
-                let (end_vr, end_is_secret) = self.compile_node(end_expr)?;
-                if start_is_secret || end_is_secret {
-                    return Err(CompilerError::semantic_error("Secret values are not supported in for-loop range bounds", iterable.location()));
-                }
-
-                // Allocate loop variable (clear) and initialize with start
-                let loop_vr = self.allocate_virtual_register(false);
-                self.emit(Instruction::MOV(loop_vr.0, start_vr.0));
-
-                // Insert loop variable into symbol table, saving any previous binding
                 let var_name = variables[0].clone();
-                let prev_binding = self.symbol_table.insert(var_name.clone(), loop_vr.0);
 
-                // Labels
-                let loop_start_label = format!("for_start_{}", self.current_instructions.len());
-                let loop_end_label = format!("for_end_{}", self.current_instructions.len());
+                // Check if iterable is a range or a collection
+                match iterable.as_ref() {
+                    AstNode::BinaryOperation { op, left, right, location: _ } if op == ".." => {
+                        // Range iteration: for i in start..end
+                        let (start_vr, start_is_secret) = self.compile_node(left)?;
+                        let (end_vr, end_is_secret) = self.compile_node(right)?;
+                        if start_is_secret || end_is_secret {
+                            return Err(CompilerError::semantic_error("Secret values are not supported in for-loop range bounds", iterable.location()));
+                        }
 
-                // Start label
-                self.add_label(loop_start_label.clone());
+                        // Allocate loop variable (clear) and initialize with start
+                        let loop_vr = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(loop_vr.0, start_vr.0));
 
-                // If i > end: exit
-                self.emit(Instruction::CMP(loop_vr.0, end_vr.0));
-                self.emit(Instruction::JMPGT(loop_end_label.clone()));
+                        // Insert loop variable into symbol table, saving any previous binding
+                        let prev_binding = self.symbol_table.insert(var_name.clone(), loop_vr.0);
 
-                // Body
-                let (_body_vr, _body_is_secret) = self.compile_node(body)?;
+                        // Labels
+                        let loop_start_label = format!("for_start_{}", self.current_instructions.len());
+                        let loop_end_label = format!("for_end_{}", self.current_instructions.len());
 
-                // i = i + 1
-                let one_vr = self.allocate_virtual_register(false);
-                let one_val = crate::core_types::Value::from(Constant::I64(1));
-                self.identified_constants.push(Constant::I64(1));
-                self.emit(Instruction::LDI(one_vr.0, one_val));
-                self.emit(Instruction::ADD(loop_vr.0, loop_vr.0, one_vr.0));
+                        // Start label
+                        self.add_label(loop_start_label.clone());
 
-                // Keep the upper bound (end_vr) live across the body to avoid clobbering by temps
-                let end_keepalive = self.allocate_virtual_register(false);
-                self.emit(Instruction::MOV(end_keepalive.0, end_vr.0));
+                        // If i > end: exit
+                        self.emit(Instruction::CMP(loop_vr.0, end_vr.0));
+                        self.emit(Instruction::JMPGT(loop_end_label.clone()));
 
-                // Jump back
-                self.emit(Instruction::JMP(loop_start_label));
+                        // Body
+                        let (_body_vr, _body_is_secret) = self.compile_node(body)?;
 
-                // End label
-                self.add_label(loop_end_label);
+                        // i = i + 1
+                        let one_vr = self.allocate_virtual_register(false);
+                        let one_val = crate::core_types::Value::from(Constant::I64(1));
+                        self.identified_constants.push(Constant::I64(1));
+                        self.emit(Instruction::LDI(one_vr.0, one_val));
+                        self.emit(Instruction::ADD(loop_vr.0, loop_vr.0, one_vr.0));
 
-                // Restore/cleanup symbol table mapping
-                match prev_binding {
-                    Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
-                    None => { self.symbol_table.remove(&variables[0]); }
+                        // Keep the upper bound (end_vr) live across the body to avoid clobbering by temps
+                        let end_keepalive = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(end_keepalive.0, end_vr.0));
+
+                        // Jump back
+                        self.emit(Instruction::JMP(loop_start_label));
+
+                        // End label
+                        self.add_label(loop_end_label);
+
+                        // Restore/cleanup symbol table mapping
+                        match prev_binding {
+                            Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
+                            None => { self.symbol_table.remove(&variables[0]); }
+                        }
+                    }
+                    _ => {
+                        // Collection iteration: for item in list
+                        // Compile the collection expression
+                        let (collection_vr, collection_is_secret) = self.compile_node(&*iterable)?;
+
+                        // Get the length of the collection: array_length(collection)
+                        self.emit(Instruction::PUSHARG(collection_vr.0));
+                        self.emit(Instruction::CALL("array_length".to_string()));
+                        let len_vr = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(len_vr.0, 0)); // Result is in r0
+
+                        // Allocate index variable (internal, starts at 0)
+                        let index_vr = self.allocate_virtual_register(false);
+                        let zero_vr = self.allocate_virtual_register(false);
+                        self.identified_constants.push(Constant::I64(0));
+                        self.emit(Instruction::LDI(zero_vr.0, crate::core_types::Value::from(Constant::I64(0))));
+                        self.emit(Instruction::MOV(index_vr.0, zero_vr.0));
+
+                        // Allocate the loop element variable.
+                        // Note: element secrecy may differ from collection secrecy (e.g., List[secret T]).
+                        // Conservatively treat loop elements as secret to avoid accidental declassification.
+                        let elem_vr = self.allocate_virtual_register(true);
+
+                        // Insert loop variable (element) into symbol table
+                        let prev_binding = self.symbol_table.insert(var_name.clone(), elem_vr.0);
+
+                        // Labels
+                        let loop_start_label = format!("for_start_{}", self.current_instructions.len());
+                        let loop_end_label = format!("for_end_{}", self.current_instructions.len());
+
+                        // Start label
+                        self.add_label(loop_start_label.clone());
+
+                        // If index >= len: exit
+                        self.emit(Instruction::CMP(index_vr.0, len_vr.0));
+                        self.emit(Instruction::JMPGT(loop_end_label.clone()));
+                        self.emit(Instruction::JMPEQ(loop_end_label.clone()));
+
+                        // Get element: elem = get_field(collection, index)
+                        self.emit(Instruction::PUSHARG(collection_vr.0));
+                        self.emit(Instruction::PUSHARG(index_vr.0));
+                        self.emit(Instruction::CALL("get_field".to_string()));
+                        self.emit(Instruction::MOV(elem_vr.0, 0)); // Result is in r0
+
+                        // Body
+                        let (_body_vr, _body_is_secret) = self.compile_node(body)?;
+
+                        // index = index + 1
+                        let one_vr = self.allocate_virtual_register(false);
+                        self.identified_constants.push(Constant::I64(1));
+                        self.emit(Instruction::LDI(one_vr.0, crate::core_types::Value::from(Constant::I64(1))));
+                        self.emit(Instruction::ADD(index_vr.0, index_vr.0, one_vr.0));
+
+                        // Keep collection and length alive across the body
+                        let collection_keepalive = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(collection_keepalive.0, collection_vr.0));
+                        let len_keepalive = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(len_keepalive.0, len_vr.0));
+
+                        // Jump back
+                        self.emit(Instruction::JMP(loop_start_label));
+
+                        // End label
+                        self.add_label(loop_end_label);
+
+                        // Restore/cleanup symbol table mapping
+                        match prev_binding {
+                            Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
+                            None => { self.symbol_table.remove(&variables[0]); }
+                        }
+                    }
                 }
 
                 // For-loops evaluate to Unit
@@ -761,6 +838,20 @@ impl CodeGenerator {
 
                 // Function definition itself doesn't produce a value in the outer scope.
                 Ok((VirtualRegister(usize::MAX), false)) // Return dummy VR
+            },
+            AstNode::ObjectDefinition { name, base_type: _, fields, is_secret: _, location: _ } => {
+                // Object definitions are type declarations - no bytecode is generated.
+                // The type information is registered in semantic analysis.
+                // At runtime, objects are created via constructor calls (to be implemented).
+                //
+                // For now, we just register the object type's field information for later use
+                // when compiling object instantiation and field access.
+                //
+                // Store field names for potential future use (e.g., for object creation)
+                let _field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+
+                // Object definition doesn't produce a runtime value
+                Ok((VirtualRegister(usize::MAX), false))
             },
             AstNode::ListLiteral(elements) => {
                 // Create array with capacity

@@ -1,6 +1,7 @@
 use crate::ast::AstNode;
 use crate::errors::SourceLocation;
 use std::collections::HashMap;
+use std::fmt;
 
 /// Represents the kind of a symbol (variable, function, type, etc.)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -57,9 +58,10 @@ pub enum SymbolType {
     TypeName(String), // For user-defined types
     Unknown, // Placeholder during analysis
     // Collection types
-    List(Box<SymbolType>),                    // list[T]
-    Dict(Box<SymbolType>, Box<SymbolType>),   // dict[K, V]
+    List(Box<SymbolType>),                    // List[T]
+    Dict(Box<SymbolType>, Box<SymbolType>),   // Dict[K, V]
     Object(String),                            // Named object type
+    Generic(String, Vec<SymbolType>),          // Generic type: Name[T1, T2, ...]
 }
 
 impl SymbolType {
@@ -207,7 +209,47 @@ impl SymbolType {
                     Box::new(SymbolType::from_ast(value_type))
                 )
             }
+            AstNode::GenericType { base_name, type_params, .. } => {
+                let params: Vec<SymbolType> = type_params.iter().map(SymbolType::from_ast).collect();
+                SymbolType::Generic(base_name.clone(), params)
+            }
             _ => SymbolType::Unknown, // Cannot determine type from this node
+        }
+    }
+}
+
+impl fmt::Display for SymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymbolType::Int64 => write!(f, "int64"),
+            SymbolType::Int32 => write!(f, "int32"),
+            SymbolType::Int16 => write!(f, "int16"),
+            SymbolType::Int8 => write!(f, "int8"),
+            SymbolType::UInt64 => write!(f, "uint64"),
+            SymbolType::UInt32 => write!(f, "uint32"),
+            SymbolType::UInt16 => write!(f, "uint16"),
+            SymbolType::UInt8 => write!(f, "uint8"),
+            SymbolType::Float => write!(f, "float"),
+            SymbolType::String => write!(f, "string"),
+            SymbolType::Bool => write!(f, "bool"),
+            SymbolType::Nil => write!(f, "nil"),
+            SymbolType::Void => write!(f, "void"),
+            SymbolType::Secret(inner) => write!(f, "secret {}", inner),
+            SymbolType::TypeName(name) => write!(f, "{}", name),
+            SymbolType::Unknown => write!(f, "<unknown>"),
+            SymbolType::List(elem) => write!(f, "List[{}]", elem),
+            SymbolType::Dict(key, val) => write!(f, "Dict[{}, {}]", key, val),
+            SymbolType::Object(name) => write!(f, "{}", name),
+            SymbolType::Generic(name, params) => {
+                write!(f, "{}[", name)?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }
@@ -281,6 +323,9 @@ pub struct SymbolTable {
     pub errors: Vec<(SymbolDeclarationError, SourceLocation)>, // Store error and location of the failed declaration
     /// Registry of builtin object types (like ClientStore)
     pub builtin_objects: HashMap<String, BuiltinObjectInfo>,
+    /// Method-to-function suggestions for common method names that should be functions.
+    /// Maps method name (e.g., "length") to suggestion string (e.g., "array_length(arr)").
+    method_suggestions: HashMap<String, String>,
 }
 
 impl SymbolTable {
@@ -291,11 +336,18 @@ impl SymbolTable {
             next_scope_id: 1, // 0 is global scope
             errors: Vec::new(),
             builtin_objects: HashMap::new(),
+            method_suggestions: HashMap::new(),
         };
         // Create the global scope (ID 0)
         table.scopes.push(Scope::new(0, None));
         table.add_builtins();
         table
+    }
+
+    /// Looks up a method suggestion for when users try to use method syntax.
+    /// Returns a suggestion string if the method name has a known function equivalent.
+    pub fn get_method_suggestion(&self, method_name: &str) -> Option<&String> {
+        self.method_suggestions.get(method_name)
     }
 
     /// Looks up a builtin object type by name
@@ -476,7 +528,7 @@ impl SymbolTable {
             qualified_name: "Share.get_party_id".to_string(),
         });
 
-        // Share.batch_open(shares_array) -> list[int64/float]
+        // Share.batch_open(shares_array) -> List[int64/float]
         share_methods.insert("batch_open".to_string(), ObjectMethodInfo {
             parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
             return_type: SymbolType::List(Box::new(SymbolType::Unknown)), // Can be int64 or float
@@ -763,6 +815,36 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
+        // Add 'append' as Pythonic alias for array_push (enables arr.append(value) via UFCS)
+        let append_info = SymbolInfo {
+            name: "append".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(append_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Add 'push' as another alias for array_push (enables arr.push(value) via UFCS)
+        let push_info = SymbolInfo {
+            name: "push".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown)), SymbolType::Unknown],
+                return_type: SymbolType::Int64, // Returns new length
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(push_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         let array_length_info = SymbolInfo {
             name: "array_length".to_string(),
             kind: SymbolKind::BuiltinFunction {
@@ -777,7 +859,43 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
-        // Add more built-ins: len, assert, etc.
+        // Add 'length' as Pythonic alias for array_length (enables arr.length() via UFCS)
+        let length_info = SymbolInfo {
+            name: "length".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(length_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Add 'len' as another alias for array_length (enables arr.len() or len(arr) via UFCS)
+        let len_info = SymbolInfo {
+            name: "len".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
+                return_type: SymbolType::Int64,
+            },
+            symbol_type: SymbolType::Int64,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(len_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // Note: Method-to-function suggestions are kept for methods that don't have
+        // direct function aliases (like pop, get, set) or have different semantics
+        self.method_suggestions.insert("pop".to_string(), "array_pop(arr)".to_string());
+        self.method_suggestions.insert("get".to_string(), "arr[index]".to_string());
+        self.method_suggestions.insert("set".to_string(), "arr[index] = value".to_string());
+        self.method_suggestions.insert("reveal".to_string(), "assign to a clear (non-secret) variable to implicitly reveal".to_string());
+        self.method_suggestions.insert("open".to_string(), "Share.open(value) or assign to clear variable".to_string());
     }
 
     /// Enters a new scope nested within the current one.
@@ -1072,5 +1190,432 @@ mod tests {
         // Should see both
         assert!(callables.contains(&"global_func".to_string()));
         assert!(callables.contains(&"local_func".to_string()));
+    }
+
+    // ===========================================
+    // Tests for builtin objects
+    // ===========================================
+
+    #[test]
+    fn test_builtin_objects_registered() {
+        let table = SymbolTable::new();
+
+        // All builtin objects should be registered
+        assert!(table.builtin_objects.contains_key("ClientStore"));
+        assert!(table.builtin_objects.contains_key("Share"));
+        assert!(table.builtin_objects.contains_key("Mpc"));
+        assert!(table.builtin_objects.contains_key("Rbc"));
+        assert!(table.builtin_objects.contains_key("Aba"));
+        assert!(table.builtin_objects.contains_key("ConsensusValue"));
+    }
+
+    #[test]
+    fn test_builtin_objects_as_symbols() {
+        let table = SymbolTable::new();
+
+        // Builtin objects should be declared as symbols in global scope
+        let client_store = table.lookup_symbol("ClientStore");
+        assert!(client_store.is_some());
+        let info = client_store.unwrap();
+        assert!(matches!(info.kind, SymbolKind::BuiltinObject { .. }));
+        assert_eq!(info.symbol_type, SymbolType::Object("ClientStore".to_string()));
+
+        let share = table.lookup_symbol("Share");
+        assert!(share.is_some());
+        assert!(matches!(share.unwrap().kind, SymbolKind::BuiltinObject { .. }));
+
+        let mpc = table.lookup_symbol("Mpc");
+        assert!(mpc.is_some());
+        assert!(matches!(mpc.unwrap().kind, SymbolKind::BuiltinObject { .. }));
+    }
+
+    #[test]
+    fn test_lookup_builtin_object() {
+        let table = SymbolTable::new();
+
+        let client_store = table.lookup_builtin_object("ClientStore");
+        assert!(client_store.is_some());
+        let obj_info = client_store.unwrap();
+        assert!(!obj_info.methods.is_empty());
+
+        // Non-existent object should return None
+        assert!(table.lookup_builtin_object("NonExistent").is_none());
+    }
+
+    // ===========================================
+    // Tests for builtin object methods
+    // ===========================================
+
+    #[test]
+    fn test_lookup_builtin_method_client_store() {
+        let table = SymbolTable::new();
+
+        // Test take_share method
+        let take_share = table.lookup_builtin_method("ClientStore", "take_share");
+        assert!(take_share.is_some());
+        let method = take_share.unwrap();
+        assert_eq!(method.parameters.len(), 2);
+        assert_eq!(method.parameters[0], SymbolType::Int64);
+        assert_eq!(method.parameters[1], SymbolType::Int64);
+        assert_eq!(method.return_type, SymbolType::Secret(Box::new(SymbolType::Int64)));
+        assert_eq!(method.qualified_name, "ClientStore.take_share");
+
+        // Test take_share_fixed method
+        let take_share_fixed = table.lookup_builtin_method("ClientStore", "take_share_fixed");
+        assert!(take_share_fixed.is_some());
+        let method = take_share_fixed.unwrap();
+        assert_eq!(method.return_type, SymbolType::Secret(Box::new(SymbolType::Float)));
+
+        // Test get_number_clients method
+        let get_number_clients = table.lookup_builtin_method("ClientStore", "get_number_clients");
+        assert!(get_number_clients.is_some());
+        let method = get_number_clients.unwrap();
+        assert!(method.parameters.is_empty());
+        assert_eq!(method.return_type, SymbolType::Int64);
+    }
+
+    #[test]
+    fn test_lookup_builtin_method_share() {
+        let table = SymbolTable::new();
+
+        // Test from_clear method
+        let from_clear = table.lookup_builtin_method("Share", "from_clear");
+        assert!(from_clear.is_some());
+        let method = from_clear.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
+
+        // Test add method (two Share arguments)
+        let add = table.lookup_builtin_method("Share", "add");
+        assert!(add.is_some());
+        let method = add.unwrap();
+        assert_eq!(method.parameters.len(), 2);
+        assert_eq!(method.parameters[0], SymbolType::Object("Share".to_string()));
+        assert_eq!(method.parameters[1], SymbolType::Object("Share".to_string()));
+        assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
+
+        // Test mul method (network operation)
+        let mul = table.lookup_builtin_method("Share", "mul");
+        assert!(mul.is_some());
+        assert_eq!(mul.unwrap().qualified_name, "Share.mul");
+
+        // Test open method
+        let open = table.lookup_builtin_method("Share", "open");
+        assert!(open.is_some());
+        let method = open.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.return_type, SymbolType::Int64);
+    }
+
+    #[test]
+    fn test_lookup_builtin_method_mpc() {
+        let table = SymbolTable::new();
+
+        // Test party_id method
+        let party_id = table.lookup_builtin_method("Mpc", "party_id");
+        assert!(party_id.is_some());
+        let method = party_id.unwrap();
+        assert!(method.parameters.is_empty());
+        assert_eq!(method.return_type, SymbolType::Int64);
+
+        // Test n_parties method
+        let n_parties = table.lookup_builtin_method("Mpc", "n_parties");
+        assert!(n_parties.is_some());
+
+        // Test threshold method
+        let threshold = table.lookup_builtin_method("Mpc", "threshold");
+        assert!(threshold.is_some());
+
+        // Test is_ready method
+        let is_ready = table.lookup_builtin_method("Mpc", "is_ready");
+        assert!(is_ready.is_some());
+        assert_eq!(is_ready.unwrap().return_type, SymbolType::Bool);
+    }
+
+    #[test]
+    fn test_lookup_builtin_method_rbc() {
+        let table = SymbolTable::new();
+
+        // Test broadcast method
+        let broadcast = table.lookup_builtin_method("Rbc", "broadcast");
+        assert!(broadcast.is_some());
+        let method = broadcast.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.parameters[0], SymbolType::String);
+        assert_eq!(method.return_type, SymbolType::Int64);
+
+        // Test receive method
+        let receive = table.lookup_builtin_method("Rbc", "receive");
+        assert!(receive.is_some());
+        let method = receive.unwrap();
+        assert_eq!(method.parameters.len(), 2);
+        assert_eq!(method.return_type, SymbolType::String);
+    }
+
+    #[test]
+    fn test_lookup_builtin_method_aba() {
+        let table = SymbolTable::new();
+
+        // Test propose method
+        let propose = table.lookup_builtin_method("Aba", "propose");
+        assert!(propose.is_some());
+        let method = propose.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.parameters[0], SymbolType::Bool);
+        assert_eq!(method.return_type, SymbolType::Int64);
+
+        // Test result method
+        let result = table.lookup_builtin_method("Aba", "result");
+        assert!(result.is_some());
+        let method = result.unwrap();
+        assert_eq!(method.return_type, SymbolType::Bool);
+
+        // Test propose_and_wait method
+        let propose_and_wait = table.lookup_builtin_method("Aba", "propose_and_wait");
+        assert!(propose_and_wait.is_some());
+    }
+
+    #[test]
+    fn test_lookup_builtin_method_consensus_value() {
+        let table = SymbolTable::new();
+
+        // Test propose method
+        let propose = table.lookup_builtin_method("ConsensusValue", "propose");
+        assert!(propose.is_some());
+        let method = propose.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.return_type, SymbolType::Object("ConsensusValueSession".to_string()));
+
+        // Test get method
+        let get = table.lookup_builtin_method("ConsensusValue", "get");
+        assert!(get.is_some());
+        let method = get.unwrap();
+        assert_eq!(method.parameters.len(), 2);
+        assert_eq!(method.return_type, SymbolType::Int64);
+    }
+
+    #[test]
+    fn test_lookup_nonexistent_method() {
+        let table = SymbolTable::new();
+
+        // Non-existent method on existing object
+        assert!(table.lookup_builtin_method("ClientStore", "nonexistent").is_none());
+
+        // Method on non-existent object
+        assert!(table.lookup_builtin_method("NonExistent", "method").is_none());
+    }
+
+    // ===========================================
+    // Tests for SymbolType::Object
+    // ===========================================
+
+    #[test]
+    fn test_symbol_type_object_equality() {
+        let obj1 = SymbolType::Object("Share".to_string());
+        let obj2 = SymbolType::Object("Share".to_string());
+        let obj3 = SymbolType::Object("ClientStore".to_string());
+
+        assert_eq!(obj1, obj2);
+        assert_ne!(obj1, obj3);
+    }
+
+    #[test]
+    fn test_symbol_type_object_in_secret() {
+        let secret_share = SymbolType::Secret(Box::new(SymbolType::Object("Share".to_string())));
+
+        assert!(secret_share.is_secret());
+        assert_eq!(
+            *secret_share.underlying_type(),
+            SymbolType::Object("Share".to_string())
+        );
+    }
+
+    #[test]
+    fn test_symbol_type_object_not_integer() {
+        let obj = SymbolType::Object("Share".to_string());
+        assert!(!obj.is_integer());
+        assert!(!obj.is_signed());
+        assert!(obj.bit_width().is_none());
+    }
+
+    // ===========================================
+    // Tests for SymbolKind::BuiltinObject
+    // ===========================================
+
+    #[test]
+    fn test_symbol_kind_builtin_object() {
+        let table = SymbolTable::new();
+
+        let share_symbol = table.lookup_symbol("Share").unwrap();
+        match &share_symbol.kind {
+            SymbolKind::BuiltinObject { object_type_name } => {
+                assert_eq!(object_type_name, "Share");
+            }
+            _ => panic!("Expected BuiltinObject kind"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_object_not_callable_directly() {
+        let table = SymbolTable::new();
+        let callables = table.get_callable_names();
+
+        // Builtin objects themselves should not be in callable names
+        // (only their methods should be)
+        assert!(!callables.contains(&"ClientStore".to_string()));
+        assert!(!callables.contains(&"Share".to_string()));
+        assert!(!callables.contains(&"Mpc".to_string()));
+    }
+
+    // ===========================================
+    // Tests for object method count and listing
+    // ===========================================
+
+    #[test]
+    fn test_share_has_all_methods() {
+        let table = SymbolTable::new();
+        let share = table.lookup_builtin_object("Share").unwrap();
+
+        // Share should have these methods
+        let expected_methods = [
+            "from_clear", "from_clear_int", "from_clear_fixed",
+            "add", "sub", "neg", "add_scalar", "mul_scalar", "mul",
+            "open", "send_to_client", "interpolate_local",
+            "get_type", "get_party_id", "batch_open"
+        ];
+
+        for method_name in expected_methods {
+            assert!(
+                share.methods.contains_key(method_name),
+                "Share should have method '{}'", method_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_client_store_has_all_methods() {
+        let table = SymbolTable::new();
+        let client_store = table.lookup_builtin_object("ClientStore").unwrap();
+
+        let expected_methods = ["take_share", "take_share_fixed", "get_number_clients"];
+
+        for method_name in expected_methods {
+            assert!(
+                client_store.methods.contains_key(method_name),
+                "ClientStore should have method '{}'", method_name
+            );
+        }
+        assert_eq!(client_store.methods.len(), 3);
+    }
+
+    #[test]
+    fn test_mpc_has_all_methods() {
+        let table = SymbolTable::new();
+        let mpc = table.lookup_builtin_object("Mpc").unwrap();
+
+        let expected_methods = ["party_id", "n_parties", "threshold", "is_ready", "instance_id"];
+
+        for method_name in expected_methods {
+            assert!(
+                mpc.methods.contains_key(method_name),
+                "Mpc should have method '{}'", method_name
+            );
+        }
+        assert_eq!(mpc.methods.len(), 5);
+    }
+
+    // ===========================================
+    // Tests for method suggestions related to objects
+    // ===========================================
+
+    #[test]
+    fn test_method_suggestion_open() {
+        let table = SymbolTable::new();
+
+        // "open" should suggest Share.open
+        let suggestion = table.get_method_suggestion("open");
+        assert!(suggestion.is_some());
+        assert!(suggestion.unwrap().contains("Share.open"));
+    }
+
+    #[test]
+    fn test_method_suggestion_reveal() {
+        let table = SymbolTable::new();
+
+        // "reveal" should suggest using clear variables
+        let suggestion = table.get_method_suggestion("reveal");
+        assert!(suggestion.is_some());
+        assert!(suggestion.unwrap().contains("clear"));
+    }
+
+    // ===========================================
+    // Tests for object variables
+    // ===========================================
+
+    #[test]
+    fn test_declare_object_typed_variable() {
+        let mut table = SymbolTable::new();
+
+        let share_var = SymbolInfo {
+            name: "my_share".to_string(),
+            kind: SymbolKind::Variable { is_mutable: false },
+            symbol_type: SymbolType::Object("Share".to_string()),
+            is_secret: false,
+            defined_at: make_loc(),
+        };
+        table.declare_symbol(share_var);
+
+        let looked_up = table.lookup_symbol("my_share");
+        assert!(looked_up.is_some());
+        assert_eq!(looked_up.unwrap().symbol_type, SymbolType::Object("Share".to_string()));
+    }
+
+    #[test]
+    fn test_declare_secret_object_variable() {
+        let mut table = SymbolTable::new();
+
+        let secret_share_var = SymbolInfo {
+            name: "secret_share".to_string(),
+            kind: SymbolKind::Variable { is_mutable: true },
+            symbol_type: SymbolType::Secret(Box::new(SymbolType::Object("Share".to_string()))),
+            is_secret: true,
+            defined_at: make_loc(),
+        };
+        table.declare_symbol(secret_share_var);
+
+        let looked_up = table.lookup_symbol("secret_share").unwrap();
+        assert!(looked_up.is_secret);
+        assert!(looked_up.symbol_type.is_secret());
+    }
+
+    // ===========================================
+    // Tests for List of objects
+    // ===========================================
+
+    #[test]
+    fn test_list_of_objects_type() {
+        let list_of_shares = SymbolType::List(Box::new(SymbolType::Object("Share".to_string())));
+
+        // Check interpolate_local accepts list of shares
+        let table = SymbolTable::new();
+        let interpolate = table.lookup_builtin_method("Share", "interpolate_local").unwrap();
+
+        assert_eq!(interpolate.parameters.len(), 1);
+        assert_eq!(
+            interpolate.parameters[0],
+            SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_batch_open_returns_list() {
+        let table = SymbolTable::new();
+        let batch_open = table.lookup_builtin_method("Share", "batch_open").unwrap();
+
+        // batch_open should return a list
+        match &batch_open.return_type {
+            SymbolType::List(_) => (),
+            _ => panic!("batch_open should return a List type"),
+        }
     }
 }

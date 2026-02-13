@@ -67,7 +67,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Checks if two types are compatible, allowing Unknown to match any type.
     /// This enables type refinement where a concrete type annotation can refine
-    /// an Unknown type from inference (e.g., `list[float]` refines `list[<unknown>]`).
+    /// an Unknown type from inference (e.g., `List[float]` refines `List[<unknown>]`).
     fn types_compatible(src: &SymbolType, dst: &SymbolType) -> bool {
         // Unknown is compatible with anything
         if *src == SymbolType::Unknown || *dst == SymbolType::Unknown {
@@ -82,6 +82,12 @@ impl<'a> SemanticAnalyzer<'a> {
             // Dict types: compatible if both key and value types are compatible
             (SymbolType::Dict(src_k, src_v), SymbolType::Dict(dst_k, dst_v)) => {
                 Self::types_compatible(src_k, dst_k) && Self::types_compatible(src_v, dst_v)
+            }
+            // Generic types: compatible if name matches and all params are compatible
+            (SymbolType::Generic(src_name, src_params), SymbolType::Generic(dst_name, dst_params)) => {
+                src_name == dst_name
+                    && src_params.len() == dst_params.len()
+                    && src_params.iter().zip(dst_params.iter()).all(|(s, d)| Self::types_compatible(s, d))
             }
             // Secret types: compare underlying types
             (SymbolType::Secret(src_inner), SymbolType::Secret(dst_inner)) => {
@@ -321,13 +327,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 // For-loops introduce a new scope for loop variables
                 // 1. Traverse the iterable expression
                 self.populate_symbols(iterable)?;
-                // 2. Enter loop scope and declare loop variables (typed as int for now)
+                // 2. Enter loop scope and declare loop variables
+                //    Use Unknown type here - actual type is inferred during analyze_node
                 self.symbol_table.enter_scope();
                 for var_name in variables {
                     let info = SymbolInfo {
                         name: var_name.clone(),
                         kind: SymbolKind::Variable { is_mutable: false },
-                        symbol_type: SymbolType::Int64,
+                        symbol_type: SymbolType::Unknown,
                         is_secret: false,
                         defined_at: node.location(),
                     };
@@ -442,7 +449,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     // Check if this looks like a method name that should be a function
                     // The parser transforms obj.method(args) into method(obj, args) via UFCS,
                     // so we catch method-like identifiers here
-                    if let Some(suggestion) = suggest_method_to_function(&name) {
+                    if let Some(suggestion) = suggest_method_to_function(&name, &self.symbol_table) {
                         self.error_reporter.add_error(
                             CompilerError::semantic_error(
                                 format!("'{}' is not a valid function name", name),
@@ -553,6 +560,11 @@ impl<'a> SemanticAnalyzer<'a> {
                     .map(|tn| SymbolType::from_ast(tn))
                     .unwrap_or_else(|| value_type.clone()); // Infer if no annotation
 
+                // Validate the type annotation if present - ensure it refers to an actual type
+                if let Some(tn) = &type_annotation {
+                    self.validate_type_annotation(&declared_type, tn.location())?;
+                }
+
                 // 3. Check for type consistency (with integer width/range rules)
                 if type_annotation.is_some() && value_type != SymbolType::Unknown {
                     if self.check_integer_compat(checked_value_node.as_deref(), &value_type, &declared_type, location.clone()).is_err() {
@@ -618,6 +630,18 @@ impl<'a> SemanticAnalyzer<'a> {
                     ret_type_annotation
                 };
 
+                // Validate parameter types - ensure they refer to actual types, not functions
+                for (param, param_type) in parameters.iter().zip(param_types.iter()) {
+                    let param_loc = param.type_annotation.as_ref()
+                        .map_or_else(|| location.clone(), |n| n.location());
+                    self.validate_type_annotation(param_type, param_loc)?;
+                }
+
+                // Validate return type
+                if let Some(rt_node) = &return_type {
+                    self.validate_type_annotation(&final_return_type, rt_node.location())?;
+                }
+
                 // Check for pragmas like 'builtin'
                 let mut is_builtin = false;
                 for pragma in &pragmas {
@@ -675,6 +699,37 @@ impl<'a> SemanticAnalyzer<'a> {
                     name, parameters, return_type, body: checked_body, is_secret, pragmas, location, node_id
                 };
                 Ok((reconstructed_node, SymbolType::Void)) // Definition is a statement
+            }
+
+            AstNode::ObjectDefinition { name, base_type, fields, is_secret, location } => {
+                // 1. Register the object type in the symbol table
+                let object_type = SymbolType::Object(name.clone());
+
+                // Build field type map for the object
+                let mut _field_types: std::collections::HashMap<String, SymbolType> = std::collections::HashMap::new();
+                for field in &fields {
+                    let mut field_type = SymbolType::from_ast(&field.type_annotation);
+                    // Apply the `secret` modifier from field definition
+                    if field.is_secret && !field_type.is_secret() {
+                        field_type = SymbolType::Secret(Box::new(field_type));
+                    }
+                    // Validate field type refers to a valid type
+                    self.validate_type_annotation(&field_type, field.type_annotation.location())?;
+                    _field_types.insert(field.name.clone(), field_type);
+                }
+
+                // Declare the object type as a type symbol
+                let info = SymbolInfo {
+                    name: name.clone(),
+                    kind: SymbolKind::Type, // User-defined type
+                    symbol_type: object_type.clone(),
+                    is_secret,
+                    defined_at: location.clone(),
+                };
+                self.symbol_table.declare_symbol(info);
+
+                // Return the node as-is (no transformation needed)
+                Ok((AstNode::ObjectDefinition { name, base_type, fields, is_secret, location }, SymbolType::Void))
             }
 
             // --- Expressions and Control Flow ---
@@ -756,7 +811,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
 
             AstNode::ForLoop { variables, iterable, body, location } => {
-                // Support only single variable numeric ranges for now: for i in a .. b
+                // Support single variable iteration over ranges or collections
                 if variables.len() != 1 {
                     self.error_reporter.add_error(CompilerError::semantic_error(
                         "For-loop with multiple variables not supported yet",
@@ -764,29 +819,52 @@ impl<'a> SemanticAnalyzer<'a> {
                     ));
                     return Err(());
                 }
-                // Analyze iterable
-                let (checked_iterable, _iter_type) = self.analyze_node(*iterable)?;
-                // Check it is a range binary op
-                match &checked_iterable {
-                    AstNode::BinaryOperation { op, left: _, right: _, location: op_loc } if op == ".." => {
-                        // ok
+
+                // Analyze iterable to determine its type
+                let (checked_iterable, iter_type) = self.analyze_node(*iterable)?;
+
+                // Determine the loop variable type based on the iterable
+                let (loop_var_type, is_secret) = match &checked_iterable {
+                    // Range iteration: for i in a..b
+                    AstNode::BinaryOperation { op, .. } if op == ".." => {
+                        (SymbolType::Int64, false)
                     }
+                    // Collection iteration: infer element type from iterable type
                     _ => {
-                        self.error_reporter.add_error(CompilerError::semantic_error(
-                            "Unsupported for-loop iterable; expected 'a .. b' range",
-                            checked_iterable.location(),
-                        ));
-                        return Err(());
+                        match iter_type.underlying_type() {
+                            SymbolType::List(elem_type) => {
+                                // Derive secrecy from the element (loop variable) type,
+                                // not from the iterable's top-level type.
+                                let elem_ty = elem_type.as_ref().clone();
+                                let is_secret = elem_ty.is_secret();
+                                (elem_ty, is_secret)
+                            }
+                            SymbolType::String => {
+                                // Iterating over a string yields characters (as strings)
+                                (SymbolType::String, false)
+                            }
+                            _ => {
+                                self.error_reporter.add_error(CompilerError::semantic_error(
+                                    format!(
+                                        "Cannot iterate over type '{}'; expected a range (a..b) or a List",
+                                        declared_type_to_string(&iter_type)
+                                    ),
+                                    checked_iterable.location(),
+                                ));
+                                return Err(());
+                            }
+                        }
                     }
-                }
-                // Enter loop scope and declare the loop variable as int (clear)
+                };
+
+                // Enter loop scope and declare the loop variable with inferred type
                 self.symbol_table.enter_scope();
                 let var_name = variables[0].clone();
                 let var_info = SymbolInfo {
                     name: var_name.clone(),
                     kind: SymbolKind::Variable { is_mutable: false },
-                    symbol_type: SymbolType::Int64,
-                    is_secret: false,
+                    symbol_type: loop_var_type,
+                    is_secret,
                     defined_at: location.clone(),
                 };
                 self.symbol_table.declare_symbol(var_info);
@@ -892,23 +970,57 @@ impl<'a> SemanticAnalyzer<'a> {
                             return Err(());
                         }
                     }
-                    // Handle method-style calls that should be function calls
-                    AstNode::FieldAccess { field_name, location: field_loc, .. } => {
-                        // Check if this is a common method that should be a function
-                        if let Some(suggestion) = suggest_method_to_function(&field_name) {
-                            self.error_reporter.add_error(
-                                CompilerError::semantic_error(
-                                    format!("Method '.{}()' is not supported", field_name),
+                    // Handle field access: could be a qualified function call (module.func)
+                    // or an unsupported method-style call (obj.method)
+                    AstNode::FieldAccess { object, field_name, location: field_loc } => {
+                        // Try to resolve as a qualified function call (e.g., module.func)
+                        if let AstNode::Identifier(obj_name, _) = object.as_ref() {
+                            let qualified_name = format!("{}.{}", obj_name, field_name);
+                            if let Some(info) = self.symbol_table.lookup_symbol(&qualified_name) {
+                                match &info.kind {
+                                    SymbolKind::Function { parameters, return_type } | SymbolKind::BuiltinFunction { parameters, return_type } => {
+                                        (qualified_name, parameters.clone(), return_type.clone())
+                                    }
+                                    _ => {
+                                        self.error_reporter.add_error(CompilerError::type_error(
+                                            format!("'{}' is not a function", qualified_name),
+                                            field_loc.clone(),
+                                        ));
+                                        return Err(());
+                                    }
+                                }
+                            } else if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
+                                self.error_reporter.add_error(
+                                    CompilerError::semantic_error(
+                                        format!("Method '.{}()' is not supported", field_name),
+                                        field_loc.clone(),
+                                    ).with_hint(format!("Use {} instead", suggestion))
+                                );
+                                return Err(());
+                            } else {
+                                self.error_reporter.add_error(CompilerError::type_error(
+                                    format!("Method calls like '.{}()' are not supported", field_name),
                                     field_loc.clone(),
-                                ).with_hint(format!("Use {} instead", suggestion))
-                            );
+                                ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                                return Err(());
+                            }
                         } else {
-                            self.error_reporter.add_error(CompilerError::type_error(
-                                format!("Method calls like '.{}()' are not supported", field_name),
-                                field_loc.clone(),
-                            ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                            // Object is not a simple identifier — unsupported method call
+                            if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
+                                self.error_reporter.add_error(
+                                    CompilerError::semantic_error(
+                                        format!("Method '.{}()' is not supported", field_name),
+                                        field_loc.clone(),
+                                    ).with_hint(format!("Use {} instead", suggestion))
+                                );
+                            } else {
+                                self.error_reporter.add_error(CompilerError::type_error(
+                                    format!("Method calls like '.{}()' are not supported", field_name),
+                                    field_loc.clone(),
+                                ).with_hint("Stoffel-Lang uses functions instead of methods. Try using a function call."));
+                            }
+                            return Err(());
                         }
-                        return Err(());
                     }
                     // Other non-callable expressions
                     _ => {
@@ -1166,7 +1278,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
                 if is_builtin_type {
                     // Check if this is a common method name that should be a function
-                    if let Some(suggestion) = suggest_method_to_function(&field_name) {
+                    if let Some(suggestion) = suggest_method_to_function(&field_name, &self.symbol_table) {
                         self.error_reporter.add_error(
                             CompilerError::semantic_error(
                                 format!("Method '.{}' is not supported on this type", field_name),
@@ -1212,6 +1324,81 @@ impl<'a> SemanticAnalyzer<'a> {
 
     // --- Helper Functions ---
 
+    /// Validates that a SymbolType doesn't contain invalid type references.
+    /// Returns an error if a TypeName refers to a function or undeclared identifier.
+    fn validate_type_annotation(&mut self, sym_type: &SymbolType, location: SourceLocation) -> Result<(), ()> {
+        match sym_type {
+            SymbolType::TypeName(name) => {
+                // Check if the name refers to something in the symbol table
+                if let Some(info) = self.symbol_table.lookup_symbol(name) {
+                    match &info.kind {
+                        SymbolKind::Type => Ok(()), // Valid type reference
+                        SymbolKind::Function { .. } | SymbolKind::BuiltinFunction { .. } => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a function, not a type", name),
+                                    location,
+                                ).with_hint(format!("'{}' is defined as a function. To use a custom type, define it with 'type' or 'object' (type aliases not yet supported)", name))
+                            );
+                            Err(())
+                        }
+                        SymbolKind::Variable { .. } => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a variable, not a type", name),
+                                    location,
+                                ).with_hint("Variable names cannot be used as types")
+                            );
+                            Err(())
+                        }
+                        SymbolKind::BuiltinObject { .. } => {
+                            // Builtin objects are valid types (e.g., Share, ClientStore)
+                            Ok(())
+                        }
+                        SymbolKind::Module => {
+                            self.error_reporter.add_error(
+                                CompilerError::type_error(
+                                    format!("'{}' is a module, not a type", name),
+                                    location,
+                                )
+                            );
+                            Err(())
+                        }
+                    }
+                } else {
+                    // Not found in symbol table - undefined type
+                    let mut error = CompilerError::type_error(
+                        format!("Undefined type '{}'", name),
+                        location,
+                    );
+                    // Try to suggest a similar type name
+                    if let Some(suggestion) = suggest_from_symbols(name, &self.symbol_table) {
+                        error = error.with_hint(format!("Did you mean '{}'?", suggestion));
+                    }
+                    self.error_reporter.add_error(error);
+                    Err(())
+                }
+            }
+            // Recursively validate nested types
+            SymbolType::List(elem) => self.validate_type_annotation(elem, location),
+            SymbolType::Dict(key, val) => {
+                self.validate_type_annotation(key, location.clone())?;
+                self.validate_type_annotation(val, location)
+            }
+            SymbolType::Secret(inner) => self.validate_type_annotation(inner, location),
+            SymbolType::Generic(name, params) => {
+                // Validate the base name as a TypeName
+                self.validate_type_annotation(&SymbolType::TypeName(name.clone()), location.clone())?;
+                // Validate each type parameter
+                for param in params {
+                    self.validate_type_annotation(param, location.clone())?;
+                }
+                Ok(())
+            }
+            // All other types are primitives or Unknown - valid
+            _ => Ok(()),
+        }
+    }
 }
 
 // Helper to get a string representation of a SymbolType for error messages
@@ -1237,9 +1424,13 @@ fn declared_type_to_string(sym_type: &SymbolType) -> String {
         SymbolType::TypeName(name) => name.clone(),
         SymbolType::Unknown => "<unknown>".to_string(),
         // Collection types
-        SymbolType::List(elem) => format!("list[{}]", declared_type_to_string(elem)),
-        SymbolType::Dict(key, val) => format!("dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
+        SymbolType::List(elem) => format!("List[{}]", declared_type_to_string(elem)),
+        SymbolType::Dict(key, val) => format!("Dict[{}, {}]", declared_type_to_string(key), declared_type_to_string(val)),
         SymbolType::Object(name) => name.clone(),
+        SymbolType::Generic(name, params) => {
+            let params_str: Vec<String> = params.iter().map(|p| declared_type_to_string(p)).collect();
+            format!("{}[{}]", name, params_str.join(", "))
+        }
     }
 }
 

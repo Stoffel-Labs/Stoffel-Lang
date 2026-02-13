@@ -1,4 +1,4 @@
-use crate::ast::{AstNode, Parameter, Pragma, Value};
+use crate::ast::{AstNode, FieldDefinition, Parameter, Pragma, Value};
 use crate::errors::{CompilerError, CompilerResult, SourceLocation};
 use std::iter::Peekable;
 use std::mem;
@@ -429,8 +429,7 @@ impl<'a> Parser<'a> {
         // Determine if it's object, enum, or type alias
         if self.check_keyword("object") {
             self.advance(); // Consume 'object'
-            // TODO: Parse object definition
-            Err(CompilerError::syntax_error("Object definition parsing not implemented", location))
+            self.parse_object_definition(is_secret, location)
         } else if self.check_keyword("enum") {
             self.advance(); // Consume 'enum'
             // TODO: Parse enum definition
@@ -442,6 +441,125 @@ impl<'a> Parser<'a> {
         } else {
             Err(CompilerError::syntax_error("Expected 'object', 'enum', or 'type' for type definition", location))
         }
+    }
+
+    /// Parses an object definition.
+    /// Syntax:
+    ///   object Name:
+    ///     field1: Type1
+    ///     field2: Type2
+    ///
+    /// Or with base type:
+    ///   object Name(BaseType):
+    ///     field1: Type1
+    fn parse_object_definition(&mut self, is_secret: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+        // Parse object name
+        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected object name after 'object'")?;
+        let name = match name_token {
+            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            _ => unreachable!(),
+        };
+
+        // Parse optional base type: object Name(BaseType):
+        let base_type = if self.check(&TokenKind::LParen) {
+            self.advance(); // Consume '('
+            let base = self.parse_type_annotation()?;
+            self.consume(&TokenKind::RParen, "Expected ')' after base type")?;
+            Some(Box::new(base))
+        } else {
+            None
+        };
+
+        // Expect ':' to start the body
+        self.consume(&TokenKind::Colon, "Expected ':' after object header")?;
+
+        // Parse the indented block of field definitions
+        let fields = self.parse_object_fields()?;
+
+        Ok(AstNode::ObjectDefinition {
+            name,
+            base_type,
+            fields,
+            is_secret,
+            location,
+        })
+    }
+
+    /// Parses the fields inside an object definition.
+    /// Each field is: field_name: Type
+    fn parse_object_fields(&mut self) -> CompilerResult<Vec<FieldDefinition>> {
+        let mut fields = Vec::new();
+
+        // Consume any newlines before the block
+        while self.check(&TokenKind::Newline) {
+            self.advance();
+        }
+
+        // Expect indent to start the block
+        if !self.check(&TokenKind::Indent) {
+            return Err(CompilerError::syntax_error(
+                "Expected indented block with field definitions after object header",
+                self.get_location(),
+            ));
+        }
+        self.advance(); // Consume Indent
+
+        // Parse field definitions until we see Dedent
+        loop {
+            // Skip any extra newlines
+            while self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+
+            // Check for end of block
+            if self.check(&TokenKind::Dedent) || self.check(&TokenKind::Eof) {
+                break;
+            }
+
+            // Check for 'secret' modifier on field
+            let field_is_secret = if self.check_keyword("secret") {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
+            // Parse field name
+            let field_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected field name")?;
+            let field_name = match field_name_token {
+                TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+                _ => unreachable!(),
+            };
+
+            // Expect ':' followed by type annotation
+            self.consume(&TokenKind::Colon, "Expected ':' after field name")?;
+            let field_type = self.parse_type_annotation()?;
+
+            fields.push(FieldDefinition {
+                name: field_name,
+                type_annotation: Box::new(field_type),
+                is_secret: field_is_secret,
+            });
+
+            // Consume newline after field definition
+            if self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+        }
+
+        // Consume the Dedent
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
+
+        if fields.is_empty() {
+            return Err(CompilerError::syntax_error(
+                "Object definition must have at least one field",
+                self.get_location(),
+            ));
+        }
+
+        Ok(fields)
     }
 
     fn parse_if_statement_or_expression(&mut self) -> CompilerResult<AstNode> {
@@ -526,43 +644,29 @@ impl<'a> Parser<'a> {
         // 'in' is tokenized as a keyword in our lexer
         self.consume_keyword("in", "Expected 'in' in for-loop header")?;
 
-        // Parse iterable expression, but enforce tight range syntax a..b for for-loops
+        // Parse iterable expression - supports both range syntax (a..b) and collection iteration
         let iterable = {
-            // Parse left expression
-            let left = self.parse_expression_with_precedence(5 /* precedence just below '..' (4) so we stop before parsing '..' */)?;
-            // Now we require exactly the '..' operator next, with no whitespace around it.
-            // Since our lexer doesn't record end positions, we enforce the rule syntactically:
-            // only accept the '..' operator token immediately next; any spaces before/after would have been tokenized as separate tokens already,
-            // but to be strict per request, we reject forms like 'a .. b' by requiring that the operator appears right now,
-            // and we forbid an intervening Newline.
-            match self.current_token_info {
-                Some(TokenInfo { kind: TokenKind::Operator(op), location: op_loc }) if op == ".." => {
-                    // Ensure no spaces variant in source: best-effort by checking previous token and next token are expressions
-                    // and emitting a tailored error if user likely wrote spaces in tests that used 'a .. b'.
-                    // Consume '..'
+            // Parse left expression with precedence just below '..' so we stop before parsing '..'
+            let left = self.parse_expression_with_precedence(5)?;
+
+            // Check if next token is '..' for range syntax
+            match &self.current_token_info {
+                Some(TokenInfo { kind: TokenKind::Operator(op), .. }) if op == ".." => {
+                    // This is a range expression - consume '..' and parse right side
                     self.advance();
+                    let right = self.parse_expression_with_precedence(4)?;
+                    AstNode::BinaryOperation {
+                        op: "..".to_string(),
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        location: self.last_location.clone(),
+                    }
                 }
-                Some(TokenInfo { ref kind, ref location }) => {
-                    // If the next token is not '..', but a range was intended, produce a targeted error.
-                    return Err(CompilerError::syntax_error(
-                        "Expected tight range 'a..b' in for-loop (no spaces around '..')",
-                        location.clone(),
-                    ).with_hint("Write: for i in a..b:"));
+                _ => {
+                    // Not a range - this is a collection/iterable expression
+                    // The 'left' expression is our iterable (e.g., a list variable)
+                    left
                 }
-                None => {
-                    return Err(CompilerError::syntax_error(
-                        "Unexpected end of input while parsing for-loop range; expected '..'",
-                        self.last_location.clone(),
-                    ).with_hint("Write: for i in a..b:"));
-                }
-            }
-            // After consuming '..', immediately parse the right expression
-            let right = self.parse_expression_with_precedence(4)?;
-            AstNode::BinaryOperation {
-                op: "..".to_string(),
-                left: Box::new(left),
-                right: Box::new(right),
-                location: self.last_location.clone(),
             }
         };
 
@@ -705,8 +809,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::LBracket => {
-                // List literal: [elem1, elem2, ...]
-                let bracket_location = token_info.location.clone();
+                // List literal: [elem1, elem2, ...] or empty list []
                 let mut elements = Vec::new();
                 if !self.check(&TokenKind::RBracket) {
                     loop {
@@ -719,14 +822,8 @@ impl<'a> Parser<'a> {
                 }
                 self.consume(&TokenKind::RBracket, "Expected ']' after list elements")?;
 
-                // Empty list literals are not supported
-                if elements.is_empty() {
-                    return Err(CompilerError::syntax_error(
-                        "Empty list literals '[]' are not supported",
-                        bracket_location
-                    ).with_hint("Use 'create_array()' to create an empty list"));
-                }
-
+                // Empty list literals [] are now supported
+                // Type will be inferred from context or explicit annotation
                 Ok(AstNode::ListLiteral(elements))
             }
             TokenKind::LBrace => {
@@ -882,6 +979,42 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Check for compound assignment operators: +=, -=, *=, /=, %=
+        // These are desugared into: x = x op value
+        if let Some(TokenInfo { kind: TokenKind::Operator(op), location: op_location }) = self.current_token_info {
+            if let Some(base_op) = match op.as_str() {
+                "+=" => Some("+"),
+                "-=" => Some("-"),
+                "*=" => Some("*"),
+                "/=" => Some("/"),
+                "%=" => Some("%"),
+                _ => None,
+            } {
+                let op_location = op_location.clone();
+                self.advance(); // Consume the compound operator
+                let rhs = self.parse_expression()?;
+
+                // Expect newline, EOF, or Dedent after the statement
+                if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) {
+                    return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after compound assignment, found {:?}", self.current_token_info), self.get_location()));
+                }
+
+                // Desugar: x += y  =>  x = x + y
+                let binary_op = AstNode::BinaryOperation {
+                    op: base_op.to_string(),
+                    left: Box::new(expr.clone()),
+                    right: Box::new(rhs),
+                    location: op_location,
+                };
+
+                return Ok(AstNode::Assignment {
+                    target: Box::new(expr),
+                    value: Box::new(binary_op),
+                    location: start_location,
+                });
+            }
+        }
+
         // Could be assignment: expr = value
         if self.check(&TokenKind::Assign) {
             self.advance(); // Consume '='
@@ -905,7 +1038,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // Parses type annotations (e.g., int, string, MyObject, list[int], secret int)
+    // Parses type annotations (e.g., int, string, MyObject, List[int], secret int)
     // IMPORTANT: This function *only* parses the type name/structure itself.
     // It handles the optional 'secret' keyword internally.
     fn parse_type_annotation(&mut self) -> CompilerResult<AstNode> {
@@ -922,21 +1055,21 @@ impl<'a> Parser<'a> {
                 let base_name = name.clone();
                 self.advance(); // Consume identifier
 
-                // Check for generic type parameters: list[int], dict[string, int]
+                // Check for generic type parameters: List[int], Dict[string, int]
                 if self.check(&TokenKind::LBracket) {
                     self.advance(); // Consume '['
 
                     match base_name.as_str() {
-                        "list" => {
+                        "List" => {
                             let element_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after list element type")?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after List element type")?;
                             AstNode::ListType(Box::new(element_type))
                         }
-                        "dict" => {
+                        "Dict" => {
                             let key_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::Comma, "Expected ',' between dict key and value types")?;
+                            self.consume(&TokenKind::Comma, "Expected ',' between Dict key and value types")?;
                             let value_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after dict value type")?;
+                            self.consume(&TokenKind::RBracket, "Expected ']' after Dict value type")?;
                             AstNode::DictType {
                                 key_type: Box::new(key_type),
                                 value_type: Box::new(value_type),
@@ -944,18 +1077,34 @@ impl<'a> Parser<'a> {
                             }
                         }
                         _ => {
-                            // Check if this is a capitalization error
-                            let hint = if base_name.to_lowercase() == "list" {
-                                format!("Did you mean 'list'? Type names are lowercase in Stoffel-Lang")
-                            } else if base_name.to_lowercase() == "dict" {
-                                format!("Did you mean 'dict'? Type names are lowercase in Stoffel-Lang")
-                            } else {
-                                "Supported generic types are: list[T], dict[K, V]".to_string()
-                            };
-                            return Err(CompilerError::syntax_error(
-                                format!("Unknown generic type: {}", base_name),
-                                type_location,
-                            ).with_hint(hint));
+                            // Check if this is a capitalization error for List/Dict
+                            if base_name == "list" {
+                                return Err(CompilerError::syntax_error(
+                                    format!("Unknown generic type: {}", base_name),
+                                    type_location,
+                                ).with_hint("Did you mean 'List'? Generic types use PascalCase"));
+                            } else if base_name == "dict" {
+                                return Err(CompilerError::syntax_error(
+                                    format!("Unknown generic type: {}", base_name),
+                                    type_location,
+                                ).with_hint("Did you mean 'Dict'? Generic types use PascalCase"));
+                            }
+
+                            // General generic type: Name[T1, T2, ...]
+                            let mut type_params = Vec::new();
+                            loop {
+                                type_params.push(self.parse_type_annotation()?);
+                                if self.check(&TokenKind::RBracket) {
+                                    break;
+                                }
+                                self.consume(&TokenKind::Comma, "Expected ',' between type parameters")?;
+                            }
+                            self.consume(&TokenKind::RBracket, "Expected ']' after type parameters")?;
+                            AstNode::GenericType {
+                                base_name,
+                                type_params,
+                                location: type_location.clone(),
+                            }
                         }
                     }
                 } else {

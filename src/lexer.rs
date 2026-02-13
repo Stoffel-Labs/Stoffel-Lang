@@ -289,22 +289,16 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     push_token(TokenKind::Arrow, make_location(line, column));
                     column += 2;
                 } else if iter.peek() == Some(&'=') {
-                    // Compound assignment -= is not supported
-                    let location = make_location(line, column);
+                    // Compound assignment -= operator
                     iter.next(); // consume '='
-                    let snippet = extract_source_snippet(source, &location, 2);
-                    return Err(CompilerError::syntax_error(
-                        "Compound assignment operator '-=' is not supported",
-                        location
-                    )
-                    .with_snippet(snippet)
-                    .with_hint("Use 'x = x - y' instead of 'x -= y'"));
+                    push_token(TokenKind::Operator("-=".to_string()), make_location(line, column));
+                    column += 2;
                 } else {
                     // Fallback to operator collection (e.g., '-', '->' handled above)
                     let start_col = column;
                     let mut op = "-".to_string();
                     while let Some(&next_c) = iter.peek() {
-                        if is_operator_char(next_c) && next_c != '>' { // avoid swallowing '>' which would form '->'
+                        if is_operator_char(next_c) && next_c != '>' && next_c != '=' { // avoid swallowing '>' or '='
                             op.push(iter.next().unwrap());
                         } else { break; }
                     }
@@ -324,25 +318,6 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     } else {
                         break;
                     }
-                }
-
-                // Check for compound assignment operators (not supported)
-                if let Some(base_op) = match op.as_str() {
-                    "+=" => Some("+"),
-                    "-=" => Some("-"),
-                    "*=" => Some("*"),
-                    "/=" => Some("/"),
-                    "%=" => Some("%"),
-                    _ => None,
-                } {
-                    let location = make_location(line, start_col);
-                    let snippet = extract_source_snippet(source, &location, 2);
-                    return Err(CompilerError::syntax_error(
-                        format!("Compound assignment operator '{}' is not supported", op),
-                        location
-                    )
-                    .with_snippet(snippet)
-                    .with_hint(format!("Use 'x = x {} y' instead of 'x {} y'", base_op, op)));
                 }
 
                 column += op.len(); // Update column based on operator length
