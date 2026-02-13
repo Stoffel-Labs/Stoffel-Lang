@@ -613,3 +613,327 @@ impl InstructionRegisterAnalysis for Instruction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stoffel_vm_types::core_types::Value;
+
+    // ===================== Liveness Analysis — Happy Path =====================
+
+    #[test]
+    fn liveness_single_define_then_use() {
+        // LDI v0, 42; RET v0
+        let instructions = vec![
+            Instruction::LDI(0, Value::I64(42)),
+            Instruction::RET(0),
+        ];
+        let intervals = analyze_liveness(&instructions);
+        let iv = intervals[&VirtualRegister(0)];
+        assert_eq!(iv.start, 0);
+        assert_eq!(iv.end, 2); // live through instruction 1 (RET uses it)
+    }
+
+    #[test]
+    fn liveness_two_non_overlapping_variables() {
+        // LDI v0, 1; RET v0; LDI v1, 2; RET v1
+        let instructions = vec![
+            Instruction::LDI(0, Value::I64(1)),
+            Instruction::RET(0),
+            Instruction::LDI(1, Value::I64(2)),
+            Instruction::RET(1),
+        ];
+        let intervals = analyze_liveness(&instructions);
+        let iv0 = intervals[&VirtualRegister(0)];
+        let iv1 = intervals[&VirtualRegister(1)];
+        // v0: [0, 2), v1: [2, 4) - no overlap
+        assert!(iv0.end <= iv1.start);
+    }
+
+    #[test]
+    fn liveness_two_overlapping_variables() {
+        // LDI v0, 1; LDI v1, 2; ADD v2, v0, v1
+        let instructions = vec![
+            Instruction::LDI(0, Value::I64(1)),
+            Instruction::LDI(1, Value::I64(2)),
+            Instruction::ADD(2, 0, 1),
+        ];
+        let intervals = analyze_liveness(&instructions);
+        let iv0 = intervals[&VirtualRegister(0)];
+        let iv1 = intervals[&VirtualRegister(1)];
+        // v0 lives [0, 3), v1 lives [1, 3) - they overlap
+        assert!(iv0.start < iv1.end && iv1.start < iv0.end);
+    }
+
+    #[test]
+    fn liveness_with_live_ins() {
+        // Function parameter v0 is live from start
+        // ADD v1, v0, v0
+        let instructions = vec![
+            Instruction::ADD(1, 0, 0),
+            Instruction::RET(1),
+        ];
+        let intervals = analyze_liveness_with_liveins(&instructions, &[VirtualRegister(0)]);
+        let iv0 = intervals[&VirtualRegister(0)];
+        assert_eq!(iv0.start, 0);
+        assert!(iv0.end >= 1); // used in instruction 0
+    }
+
+    #[test]
+    fn liveness_variable_defined_but_never_used() {
+        // LDI v0, 42  (defined but not used)
+        let instructions = vec![
+            Instruction::LDI(0, Value::I64(42)),
+        ];
+        let intervals = analyze_liveness(&instructions);
+        let iv = intervals[&VirtualRegister(0)];
+        // Should have at least a minimal live range covering the definition
+        assert!(iv.end > iv.start);
+    }
+
+    // ===================== Interference Graph — Happy Path =====================
+
+    #[test]
+    fn interference_graph_no_edges_non_overlapping() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 2 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 2, end: 4 });
+        let graph = build_interference_graph(&intervals);
+        assert_eq!(graph.degree(&VirtualRegister(0)), 0);
+        assert_eq!(graph.degree(&VirtualRegister(1)), 0);
+    }
+
+    #[test]
+    fn interference_graph_edge_on_overlap() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 3 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 1, end: 4 });
+        let graph = build_interference_graph(&intervals);
+        assert_eq!(graph.degree(&VirtualRegister(0)), 1);
+        let neighbors = graph.neighbors(&VirtualRegister(0)).unwrap();
+        assert!(neighbors.contains(&VirtualRegister(1)));
+    }
+
+    #[test]
+    fn interference_graph_chain_a_b_c() {
+        // a overlaps b, b overlaps c, but a does NOT overlap c
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 2 }); // a
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 1, end: 3 }); // b
+        intervals.insert(VirtualRegister(2), LiveInterval { start: 2, end: 4 }); // c
+        let graph = build_interference_graph(&intervals);
+        // a-b edge, b-c edge, no a-c edge
+        assert_eq!(graph.degree(&VirtualRegister(0)), 1);
+        assert_eq!(graph.degree(&VirtualRegister(1)), 2);
+        assert_eq!(graph.degree(&VirtualRegister(2)), 1);
+        assert!(!graph.neighbors(&VirtualRegister(0)).unwrap().contains(&VirtualRegister(2)));
+    }
+
+    #[test]
+    fn interference_graph_add_and_remove_node() {
+        let mut graph = InterferenceGraph::default();
+        graph.add_node(VirtualRegister(0));
+        graph.add_node(VirtualRegister(1));
+        graph.add_edge(VirtualRegister(0), VirtualRegister(1));
+        assert_eq!(graph.degree(&VirtualRegister(0)), 1);
+
+        graph.remove_node(&VirtualRegister(1));
+        assert_eq!(graph.degree(&VirtualRegister(0)), 0);
+        assert_eq!(graph.neighbors(&VirtualRegister(1)), None);
+    }
+
+    #[test]
+    fn self_edge_is_ignored() {
+        let mut graph = InterferenceGraph::default();
+        graph.add_node(VirtualRegister(0));
+        graph.add_edge(VirtualRegister(0), VirtualRegister(0));
+        assert_eq!(graph.degree(&VirtualRegister(0)), 0);
+    }
+
+    // ===================== Graph Coloring — Happy Path =====================
+
+    #[test]
+    fn color_graph_simple_no_interference() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 2 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 2, end: 4 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), false);
+        secrecy_map.insert(VirtualRegister(1), false);
+
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &HashMap::new()).unwrap();
+        assert!(alloc.contains_key(&VirtualRegister(0)));
+        assert!(alloc.contains_key(&VirtualRegister(1)));
+    }
+
+    #[test]
+    fn color_graph_interfering_get_different_colors() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 3 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 1, end: 4 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), false);
+        secrecy_map.insert(VirtualRegister(1), false);
+
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &HashMap::new()).unwrap();
+        assert_ne!(alloc[&VirtualRegister(0)], alloc[&VirtualRegister(1)]);
+    }
+
+    #[test]
+    fn color_graph_secret_registers_use_secret_pool() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 2 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), true); // secret
+
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &HashMap::new()).unwrap();
+        // Secret registers start at k_clear (16)
+        assert!(alloc[&VirtualRegister(0)].0 >= 16);
+    }
+
+    #[test]
+    fn color_graph_clear_registers_below_secret_start() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 2 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), false); // clear
+
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &HashMap::new()).unwrap();
+        // Clear registers go from 1..k_clear (R0 is reserved for ABI)
+        assert!(alloc[&VirtualRegister(0)].0 >= 1 && alloc[&VirtualRegister(0)].0 < 16);
+    }
+
+    // ===================== Instruction Rewriting — Happy Path =====================
+
+    #[test]
+    fn rewrite_instructions_maps_virtual_to_physical() {
+        let instructions = vec![
+            Instruction::LDI(0, Value::I64(10)),
+            Instruction::LDI(1, Value::I64(20)),
+            Instruction::ADD(2, 0, 1),
+            Instruction::RET(2),
+        ];
+        let mut alloc = HashMap::new();
+        alloc.insert(VirtualRegister(0), PhysicalRegister(1));
+        alloc.insert(VirtualRegister(1), PhysicalRegister(2));
+        alloc.insert(VirtualRegister(2), PhysicalRegister(3));
+
+        let rewritten = rewrite_instructions(&instructions, &alloc);
+        assert!(matches!(rewritten[0], Instruction::LDI(1, _)));
+        assert!(matches!(rewritten[1], Instruction::LDI(2, _)));
+        assert!(matches!(rewritten[2], Instruction::ADD(3, 1, 2)));
+        assert!(matches!(rewritten[3], Instruction::RET(3)));
+    }
+
+    // ===================== Semi-honest =====================
+
+    #[test]
+    fn liveness_empty_instructions() {
+        let intervals = analyze_liveness(&[]);
+        assert!(intervals.is_empty());
+    }
+
+    #[test]
+    fn interference_graph_single_register_no_edges() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 5 });
+        let graph = build_interference_graph(&intervals);
+        assert_eq!(graph.degree(&VirtualRegister(0)), 0);
+    }
+
+    #[test]
+    fn color_graph_with_precolored() {
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 3 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 1, end: 4 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), false);
+        secrecy_map.insert(VirtualRegister(1), false);
+
+        let mut precolored = HashMap::new();
+        precolored.insert(VirtualRegister(0), PhysicalRegister(1)); // Force v0 -> R1
+
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &precolored).unwrap();
+        assert_eq!(alloc[&VirtualRegister(0)], PhysicalRegister(1));
+        // v1 must get a different register since it interferes with v0
+        assert_ne!(alloc[&VirtualRegister(1)], PhysicalRegister(1));
+    }
+
+    // ===================== Adversarial =====================
+
+    #[test]
+    fn color_graph_pool_exhaustion_causes_spill() {
+        // Two interfering clear registers but only 2 clear slots (1 usable since R0 reserved)
+        let mut intervals = HashMap::new();
+        intervals.insert(VirtualRegister(0), LiveInterval { start: 0, end: 3 });
+        intervals.insert(VirtualRegister(1), LiveInterval { start: 1, end: 4 });
+        let graph = build_interference_graph(&intervals);
+
+        let mut secrecy_map = HashMap::new();
+        secrecy_map.insert(VirtualRegister(0), false);
+        secrecy_map.insert(VirtualRegister(1), false);
+
+        // Only 2 clear regs (indices 0..2, but R0 reserved, so only R1 available)
+        // Two interfering nodes need 2 registers but only 1 usable
+        let result = color_graph(&graph, 2, 0, &secrecy_map, &HashMap::new());
+        match result {
+            Err(AllocationError::NeedsSpilling(vrs)) => {
+                assert!(!vrs.is_empty(), "Spill list should not be empty");
+            }
+            Err(AllocationError::PoolExhausted(vr, _)) => {
+                // Also acceptable — pool exhaustion for a specific register
+                let _ = vr; // just confirm it's a valid register
+            }
+            Ok(_) => panic!("Expected allocation failure due to pool exhaustion"),
+        }
+    }
+
+    #[test]
+    fn high_register_pressure_many_simultaneous_live() {
+        // 8 registers all live simultaneously, but with enough pool size
+        let mut intervals = HashMap::new();
+        let mut secrecy_map = HashMap::new();
+        for i in 0..8 {
+            intervals.insert(VirtualRegister(i), LiveInterval { start: 0, end: 10 });
+            secrecy_map.insert(VirtualRegister(i), false);
+        }
+        let graph = build_interference_graph(&intervals);
+        // All 8 interfere with each other, need 8 different colors
+        // k_clear = 16, so R1..R15 = 15 usable. Should succeed.
+        let alloc = color_graph(&graph, 16, 16, &secrecy_map, &HashMap::new()).unwrap();
+        // Verify all 8 got unique physical registers
+        let phys_regs: HashSet<PhysicalRegister> = alloc.values().cloned().collect();
+        assert_eq!(phys_regs.len(), 8);
+    }
+
+    #[test]
+    fn rewrite_preserves_labels_and_calls() {
+        let instructions = vec![
+            Instruction::JMP("loop_start".into()),
+            Instruction::CALL("my_func".into()),
+        ];
+        let alloc = HashMap::new(); // No VRs used by JMP/CALL
+        let rewritten = rewrite_instructions(&instructions, &alloc);
+        assert_eq!(rewritten.len(), 2);
+        // Verify exact label/function name values, not just instruction type
+        match &rewritten[0] {
+            Instruction::JMP(label) => assert_eq!(label, "loop_start"),
+            other => panic!("Expected JMP(\"loop_start\"), got {:?}", other),
+        }
+        match &rewritten[1] {
+            Instruction::CALL(name) => assert_eq!(name, "my_func"),
+            other => panic!("Expected CALL(\"my_func\"), got {:?}", other),
+        }
+    }
+}
+
