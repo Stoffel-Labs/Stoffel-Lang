@@ -49,10 +49,13 @@ impl CodeGenerator {
         known_builtins.insert("set_field".to_string());
         known_builtins.insert("array_push".to_string());
         known_builtins.insert("array_length".to_string());
-        // ClientStore builtin object methods (qualified names)
-        known_builtins.insert("ClientStore.take_share".to_string());
-        known_builtins.insert("ClientStore.take_share_fixed".to_string());
-        known_builtins.insert("ClientStore.get_number_clients".to_string());
+        // ClientStore builtin object methods (HoneyBadger only - requires client input)
+        #[cfg(feature = "honeybadger")]
+        {
+            known_builtins.insert("ClientStore.take_share".to_string());
+            known_builtins.insert("ClientStore.take_share_fixed".to_string());
+            known_builtins.insert("ClientStore.get_number_clients".to_string());
+        }
 
         // Share builtin object methods (matches VM mpc_builtins.rs)
         known_builtins.insert("Share.from_clear".to_string());
@@ -63,9 +66,13 @@ impl CodeGenerator {
         known_builtins.insert("Share.neg".to_string());
         known_builtins.insert("Share.add_scalar".to_string());
         known_builtins.insert("Share.mul_scalar".to_string());
-        known_builtins.insert("Share.mul".to_string());
+        // Share operations requiring Beaver triple multiplication (HoneyBadger only)
+        #[cfg(feature = "honeybadger")]
+        {
+            known_builtins.insert("Share.mul".to_string());
+            known_builtins.insert("Share.send_to_client".to_string());
+        }
         known_builtins.insert("Share.open".to_string());
-        known_builtins.insert("Share.send_to_client".to_string());
         known_builtins.insert("Share.interpolate_local".to_string());
         known_builtins.insert("Share.get_type".to_string());
         known_builtins.insert("Share.get_party_id".to_string());
@@ -76,6 +83,10 @@ impl CodeGenerator {
         known_builtins.insert("Mpc.threshold".to_string());
         known_builtins.insert("Mpc.is_ready".to_string());
         known_builtins.insert("Mpc.instance_id".to_string());
+        known_builtins.insert("Mpc.supports_multiplication".to_string());
+        known_builtins.insert("Mpc.supports_dkg".to_string());
+        known_builtins.insert("Mpc.supports_client_input".to_string());
+        known_builtins.insert("Mpc.protocol_name".to_string());
 
         // Rbc builtin object methods (Reliable Broadcast)
         known_builtins.insert("Rbc.broadcast".to_string());
