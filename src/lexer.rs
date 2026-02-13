@@ -1,5 +1,6 @@
 use crate::errors::{extract_source_snippet, CompilerError, CompilerResult, SourceLocation};
 use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TokenInfo {
@@ -38,6 +39,45 @@ pub enum TokenKind {
     Dedent,
     // End of File
     Eof,
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKind::Identifier(name) => write!(f, "identifier '{}'", name),
+            TokenKind::Keyword(kw) => write!(f, "keyword '{}'", kw),
+            TokenKind::Operator(op) => write!(f, "operator '{}'", op),
+            TokenKind::Arrow => write!(f, "'->'"),
+            TokenKind::IntLiteral { value, .. } => write!(f, "integer '{}'", value),
+            TokenKind::FloatLiteral(v) => write!(f, "float '{}'", v),
+            TokenKind::StringLiteral(s) => write!(f, "string \"{}\"", s),
+            TokenKind::BoolLiteral(b) => write!(f, "'{}'", b),
+            TokenKind::NilLiteral => write!(f, "'nil'"),
+            TokenKind::LParen => write!(f, "'('"),
+            TokenKind::RParen => write!(f, "')'"),
+            TokenKind::LBrace => write!(f, "'{{'"),
+            TokenKind::RBrace => write!(f, "'}}'"),
+            TokenKind::LBracket => write!(f, "'['"),
+            TokenKind::RBracket => write!(f, "']'"),
+            TokenKind::Comma => write!(f, "','"),
+            TokenKind::Dot => write!(f, "'.'"),
+            TokenKind::LPragma => write!(f, "'{{.'"),
+            TokenKind::RPragma => write!(f, "'.}}'"),
+            TokenKind::PragmaDot => write!(f, "'.'"),
+            TokenKind::Colon => write!(f, "':'"),
+            TokenKind::Assign => write!(f, "'='"),
+            TokenKind::Newline => write!(f, "newline"),
+            TokenKind::Indent => write!(f, "indent"),
+            TokenKind::Dedent => write!(f, "dedent"),
+            TokenKind::Eof => write!(f, "end of file"),
+        }
+    }
+}
+
+impl fmt::Display for TokenInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.kind)
+    }
 }
 
 fn is_operator_char(c: char) -> bool {
@@ -512,4 +552,398 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
 
     push_token(TokenKind::Eof, make_location(line, column));
     Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: tokenize and return only the token kinds (stripping locations).
+    fn kinds(source: &str) -> Vec<TokenKind> {
+        tokenize(source, "test.stfl")
+            .expect("tokenize failed")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect()
+    }
+
+    /// Helper: assert tokenization returns an Err containing `expected_msg`.
+    fn assert_err(source: &str, expected_msg: &str) {
+        let result = tokenize(source, "test.stfl");
+        match result {
+            Err(e) => assert!(
+                e.message.contains(expected_msg),
+                "Expected error containing '{}', got: '{}'",
+                expected_msg,
+                e.message
+            ),
+            Ok(_) => panic!("Expected error containing '{}', but tokenize succeeded", expected_msg),
+        }
+    }
+
+    // ── Happy Path ──────────────────────────────────────────────────────
+
+    #[test]
+    fn identifiers_and_keywords() {
+        let toks = kinds("var foo");
+        assert_eq!(toks, vec![
+            TokenKind::Keyword("var".into()),
+            TokenKind::Identifier("foo".into()),
+            TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn all_keywords_recognized() {
+        let src = "var def main type object enum if else elif while for in return yield break continue secret discard import as";
+        let toks = kinds(src);
+        // All should be Keyword(...) tokens (no Identifier), ending with Eof
+        for tok in &toks[..toks.len() - 1] {
+            match tok {
+                TokenKind::Keyword(_) => {}
+                other => panic!("Expected Keyword, got {:?}", other),
+            }
+        }
+        assert_eq!(*toks.last().unwrap(), TokenKind::Eof);
+    }
+
+    #[test]
+    fn bool_and_nil_literals() {
+        let toks = kinds("true false nil");
+        assert_eq!(toks, vec![
+            TokenKind::BoolLiteral(true),
+            TokenKind::BoolLiteral(false),
+            TokenKind::NilLiteral,
+            TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn integer_literal_decimal() {
+        let toks = kinds("42");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 42, radix: 10, kind: None });
+    }
+
+    #[test]
+    fn integer_literal_bases() {
+        let toks = kinds("0xFF 0b1010 0o17");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 255, radix: 16, kind: None });
+        assert_eq!(toks[1], TokenKind::IntLiteral { value: 10, radix: 2, kind: None });
+        assert_eq!(toks[2], TokenKind::IntLiteral { value: 15, radix: 8, kind: None });
+    }
+
+    #[test]
+    fn integer_literal_with_underscores() {
+        let toks = kinds("1_000_000");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 1_000_000, radix: 10, kind: None });
+    }
+
+    #[test]
+    fn integer_literal_with_suffix() {
+        let toks = kinds("42i32 7u8");
+        assert_eq!(toks[0], TokenKind::IntLiteral {
+            value: 42, radix: 10,
+            kind: Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W32)),
+        });
+        assert_eq!(toks[1], TokenKind::IntLiteral {
+            value: 7, radix: 10,
+            kind: Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W8)),
+        });
+    }
+
+    #[test]
+    fn float_literal() {
+        // 3.14 => fixed-point with 4 decimal places => 31400
+        let toks = kinds("3.14");
+        assert_eq!(toks[0], TokenKind::FloatLiteral(31400));
+    }
+
+    #[test]
+    fn float_literal_leading_dot() {
+        // .5 => 0.5 => 5000
+        let toks = kinds(".5");
+        assert_eq!(toks[0], TokenKind::FloatLiteral(5000));
+    }
+
+    #[test]
+    fn string_literal_with_escapes() {
+        let toks = kinds(r#""hello\nworld\t\\end\"""#);
+        assert_eq!(toks[0], TokenKind::StringLiteral("hello\nworld\t\\end\"".into()));
+    }
+
+    #[test]
+    fn operators_basic() {
+        let toks = kinds("+ - * / %");
+        // Each single-char operator should be its own Operator token
+        assert_eq!(toks[0], TokenKind::Operator("+".into()));
+        assert_eq!(toks[1], TokenKind::Operator("-".into()));
+        assert_eq!(toks[2], TokenKind::Operator("*".into()));
+        assert_eq!(toks[3], TokenKind::Operator("/".into()));
+        assert_eq!(toks[4], TokenKind::Operator("%".into()));
+    }
+
+    #[test]
+    fn comparison_operators() {
+        let toks = kinds("== != < > <= >=");
+        assert_eq!(toks[0], TokenKind::Operator("==".into()));
+        assert_eq!(toks[1], TokenKind::Operator("!=".into()));
+        assert_eq!(toks[2], TokenKind::Operator("<".into()));
+        assert_eq!(toks[3], TokenKind::Operator(">".into()));
+        assert_eq!(toks[4], TokenKind::Operator("<=".into()));
+        assert_eq!(toks[5], TokenKind::Operator(">=".into()));
+    }
+
+    #[test]
+    fn compound_assignment_operators() {
+        let toks = kinds("+= -= *= /= %=");
+        assert_eq!(toks[0], TokenKind::Operator("+=".into()));
+        assert_eq!(toks[1], TokenKind::Operator("-=".into()));
+        assert_eq!(toks[2], TokenKind::Operator("*=".into()));
+        assert_eq!(toks[3], TokenKind::Operator("/=".into()));
+        assert_eq!(toks[4], TokenKind::Operator("%=".into()));
+    }
+
+    #[test]
+    fn arrow_token() {
+        let toks = kinds("def foo() -> int");
+        assert!(toks.contains(&TokenKind::Arrow));
+    }
+
+    #[test]
+    fn pragma_tokens() {
+        let toks = kinds("{. pure .}");
+        assert_eq!(toks[0], TokenKind::LPragma);
+        assert_eq!(toks[1], TokenKind::Identifier("pure".into()));
+        assert_eq!(toks[2], TokenKind::RPragma);
+    }
+
+    #[test]
+    fn indentation_indent_dedent() {
+        let src = "if x\n  y\nz";
+        let toks = kinds(src);
+        // Expected: Keyword(if) Ident(x) Newline Indent Ident(y) Newline Dedent Ident(z) Eof
+        assert_eq!(toks, vec![
+            TokenKind::Keyword("if".into()),
+            TokenKind::Identifier("x".into()),
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("y".into()),
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Identifier("z".into()),
+            TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn nested_indentation() {
+        let src = "a\n  b\n    c\n  d\ne";
+        let toks = kinds(src);
+        assert_eq!(toks, vec![
+            TokenKind::Identifier("a".into()),
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("b".into()),
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("c".into()),
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Identifier("d".into()),
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Identifier("e".into()),
+            TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn comments_are_ignored() {
+        let toks = kinds("x # this is a comment\ny");
+        assert_eq!(toks, vec![
+            TokenKind::Identifier("x".into()),
+            TokenKind::Newline,
+            TokenKind::Identifier("y".into()),
+            TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn delimiters_and_punctuation() {
+        let toks = kinds("( ) { } [ ] , . : =");
+        assert_eq!(toks[0], TokenKind::LParen);
+        assert_eq!(toks[1], TokenKind::RParen);
+        assert_eq!(toks[2], TokenKind::LBrace);
+        assert_eq!(toks[3], TokenKind::RBrace);
+        assert_eq!(toks[4], TokenKind::LBracket);
+        assert_eq!(toks[5], TokenKind::RBracket);
+        assert_eq!(toks[6], TokenKind::Comma);
+        assert_eq!(toks[7], TokenKind::Dot);
+        assert_eq!(toks[8], TokenKind::Colon);
+        assert_eq!(toks[9], TokenKind::Assign);
+    }
+
+    #[test]
+    fn range_operator() {
+        let toks = kinds("1..10");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 1, radix: 10, kind: None });
+        assert_eq!(toks[1], TokenKind::Operator("..".into()));
+        assert_eq!(toks[2], TokenKind::IntLiteral { value: 10, radix: 10, kind: None });
+    }
+
+    // ── Semi-honest: Edge Cases ─────────────────────────────────────────
+
+    #[test]
+    fn empty_source() {
+        let toks = kinds("");
+        assert_eq!(toks, vec![TokenKind::Eof]);
+    }
+
+    #[test]
+    fn only_whitespace_and_newlines() {
+        let toks = kinds("  \n\n  \n");
+        // Should produce only Newlines and Eof — no Indent/Dedent for blank lines
+        assert!(!toks.iter().any(|t| matches!(t, TokenKind::Indent | TokenKind::Dedent)),
+            "Blank lines should not produce Indent/Dedent tokens, got: {:?}", toks);
+        assert_eq!(*toks.last().unwrap(), TokenKind::Eof);
+    }
+
+    #[test]
+    fn identifier_starting_like_keyword() {
+        // "def_value" starts with "def" but should be an Identifier, not a Keyword
+        let toks = kinds("def_value import_thing variable");
+        assert_eq!(toks[0], TokenKind::Identifier("def_value".into()));
+        assert_eq!(toks[1], TokenKind::Identifier("import_thing".into()));
+        assert_eq!(toks[2], TokenKind::Identifier("variable".into()));
+    }
+
+    #[test]
+    fn zero_literal() {
+        let toks = kinds("0");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 0, radix: 10, kind: None });
+    }
+
+    #[test]
+    fn hex_uppercase_and_lowercase() {
+        let toks = kinds("0xABcd");
+        assert_eq!(toks[0], TokenKind::IntLiteral { value: 0xABcd, radix: 16, kind: None });
+    }
+
+    #[test]
+    fn comment_only_line_does_not_affect_indentation() {
+        // A comment-only line between indented blocks should not generate extra Indent/Dedent
+        let src = "if x\n  a\n# comment\n  b";
+        let toks = kinds(src);
+        let indent_count = toks.iter().filter(|t| matches!(t, TokenKind::Indent)).count();
+        let dedent_count = toks.iter().filter(|t| matches!(t, TokenKind::Dedent)).count();
+        assert_eq!(indent_count, 1, "Should have exactly 1 Indent, got tokens: {:?}", toks);
+        assert_eq!(dedent_count, 1, "Should have exactly 1 Dedent (at EOF), got tokens: {:?}", toks);
+        // Verify identifiers a and b are both present (comment didn't eat surrounding tokens)
+        let idents: Vec<_> = toks.iter().filter_map(|t| match t {
+            TokenKind::Identifier(name) => Some(name.as_str()),
+            _ => None,
+        }).collect();
+        assert!(idents.contains(&"a") && idents.contains(&"b"),
+            "Expected identifiers 'a' and 'b', got: {:?}", idents);
+    }
+
+    #[test]
+    fn empty_string_literal() {
+        let toks = kinds(r#""""#);
+        assert_eq!(toks[0], TokenKind::StringLiteral("".into()));
+    }
+
+    #[test]
+    fn adjacent_operators_without_whitespace() {
+        // "+-" are adjacent operator chars, the lexer will greedily combine them
+        let toks = kinds("a+-b");
+        // Expect: Ident(a), Operator("+-"), Ident(b), Eof
+        assert_eq!(toks[0], TokenKind::Identifier("a".into()));
+        assert_eq!(toks[1], TokenKind::Operator("+-".into()));
+        assert_eq!(toks[2], TokenKind::Identifier("b".into()));
+    }
+
+    #[test]
+    fn multiple_dedents_at_eof() {
+        let src = "a\n  b\n    c";
+        let toks = kinds(src);
+        // Two indent levels entered, so two Dedents should be emitted at EOF
+        let indent_count = toks.iter().filter(|t| matches!(t, TokenKind::Indent)).count();
+        let dedent_count = toks.iter().filter(|t| matches!(t, TokenKind::Dedent)).count();
+        assert_eq!(indent_count, 2, "Expected 2 Indents for two nesting levels");
+        assert_eq!(dedent_count, 2, "Expected 2 Dedents at EOF to close both levels");
+        // Verify sequence ends with Dedent, Dedent, Eof
+        let len = toks.len();
+        assert_eq!(toks[len - 1], TokenKind::Eof);
+        assert_eq!(toks[len - 2], TokenKind::Dedent);
+        assert_eq!(toks[len - 3], TokenKind::Dedent);
+        // Verify all three identifiers are present in order
+        let idents: Vec<_> = toks.iter().filter_map(|t| match t {
+            TokenKind::Identifier(name) => Some(name.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(idents, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn assign_vs_equality() {
+        let toks = kinds("x = y == z");
+        assert_eq!(toks[0], TokenKind::Identifier("x".into()));
+        assert_eq!(toks[1], TokenKind::Assign);
+        assert_eq!(toks[2], TokenKind::Identifier("y".into()));
+        assert_eq!(toks[3], TokenKind::Operator("==".into()));
+        assert_eq!(toks[4], TokenKind::Identifier("z".into()));
+    }
+
+    #[test]
+    fn bitwise_operators() {
+        let toks = kinds("& | ^ << >>");
+        assert_eq!(toks[0], TokenKind::Operator("&".into()));
+        assert_eq!(toks[1], TokenKind::Operator("|".into()));
+        assert_eq!(toks[2], TokenKind::Operator("^".into()));
+        assert_eq!(toks[3], TokenKind::Operator("<<".into()));
+        assert_eq!(toks[4], TokenKind::Operator(">>".into()));
+    }
+
+    // ── Adversarial ─────────────────────────────────────────────────────
+
+    #[test]
+    fn tab_indentation_rejected() {
+        assert_err("\tvar x", "Tabs are not allowed");
+    }
+
+    #[test]
+    fn invalid_escape_sequence() {
+        assert_err(r#""\q""#, "Invalid escape sequence");
+    }
+
+    #[test]
+    fn unexpected_character() {
+        assert_err("@", "Unexpected character");
+    }
+
+    #[test]
+    fn invalid_indentation_step() {
+        // 3 spaces instead of 2
+        assert_err("if x\n   y", "Invalid indentation");
+    }
+
+    #[test]
+    fn inconsistent_dedentation() {
+        // Dedent to a level that was never on the stack
+        assert_err("if x\n    y\n  z", "Invalid indentation");
+    }
+
+    #[test]
+    fn location_tracking() {
+        let tokens = tokenize("ab\ncd", "test.stfl").unwrap();
+        // "ab" is at line 1, col 1
+        assert_eq!(tokens[0].location.line, 1);
+        assert_eq!(tokens[0].location.column, 1);
+        // Newline at line 1
+        assert_eq!(tokens[1].location.line, 1);
+        // "cd" is at line 2, col 1
+        assert_eq!(tokens[2].location.line, 2);
+        assert_eq!(tokens[2].location.column, 1);
+    }
 }

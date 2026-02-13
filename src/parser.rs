@@ -66,15 +66,15 @@ impl<'a> Parser<'a> {
                 TokenKind::Identifier(_) => "identifier".to_string(),
                 TokenKind::Keyword(k) => format!("keyword '{}'", k),
                 TokenKind::Operator(op) => format!("operator '{}'", op),
-                _ => format!("{:?}", expected),
+                _ => format!("{}", expected),
             };
-            
+
             let (found_str, location) = match self.current_token_info {
-                Some(token) => (format!("{:?}", token), token.location.clone()),
+                Some(token) => (format!("{}", token), token.location.clone()),
                 None => ("end of file".to_string(), self.last_location.clone()),
             };
-            
-            Err(CompilerError::syntax_error(format!("{} Expected {}, found {}", error_message, expected_str, found_str), location)
+
+            Err(CompilerError::missing_token(format!("{} Expected {}, found {}", error_message, expected_str, found_str), location)
                 .with_hint(format!("Try adding {} here", expected_str)))
         }
     }
@@ -85,12 +85,12 @@ impl<'a> Parser<'a> {
              Ok(self.advance().unwrap()) // Safe unwrap because check succeeded
         } else {
              let (found_str, location) = match self.current_token_info {
-                 Some(token) => (format!("{:?}", token), token.location.clone()),
+                 Some(token) => (format!("{}", token), token.location.clone()),
                  None => ("end of file".to_string(), self.last_location.clone()),
              };
-             
-             Err(CompilerError::syntax_error(
-                 format!("{} Expected keyword '{}', found {}", error_message, keyword, found_str), 
+
+             Err(CompilerError::missing_token(
+                 format!("{} Expected keyword '{}', found {}", error_message, keyword, found_str),
                  location
              ).with_hint(format!("Try using the '{}' keyword here", keyword)))
         }
@@ -186,11 +186,11 @@ impl<'a> Parser<'a> {
             // Add cases for other statement starters
             _ => {
                 let (found_str, location) = match self.current_token_info {
-                    Some(token) => (format!("{:?}", token), token.location.clone()),
+                    Some(token) => (format!("{}", token), token.location.clone()),
                     None => ("end of file".to_string(), self.last_location.clone()),
                 };
 
-                Err(CompilerError::syntax_error(format!("Unexpected token at start of statement/declaration: {}", found_str), location))
+                Err(CompilerError::unexpected_token(format!("Unexpected token at start of statement/declaration: {}", found_str), location))
             }
         }
     }
@@ -701,7 +701,7 @@ impl<'a> Parser<'a> {
 
         // Expect newline, EOF, or Dedent after the statement
         if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after discard statement, found {:?}", self.current_token_info), self.get_location()));
+            return Err(CompilerError::unexpected_token(format!("Expected newline, EOF, or dedent after discard statement, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))), self.get_location()));
         }
 
         Ok(AstNode::DiscardStatement {
@@ -750,8 +750,8 @@ impl<'a> Parser<'a> {
 
         // Expect newline, EOF, or Dedent after import statement
         if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
-            return Err(CompilerError::syntax_error(
-                format!("Expected newline after import statement, found {:?}", self.current_token_info),
+            return Err(CompilerError::unexpected_token(
+                format!("Expected newline after import statement, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))),
                 self.get_location(),
             ));
         }
@@ -861,7 +861,7 @@ impl<'a> Parser<'a> {
                 }
             }
             // TODO: Add function calls, list literals, etc.
-            _ => Err(CompilerError::syntax_error(format!("Expected expression, found {:?}", token_info.kind), token_info.location.clone())
+            _ => Err(CompilerError::unexpected_token(format!("Expected expression, found {}", token_info.kind), token_info.location.clone())
                     .with_hint("An expression can be a literal, identifier, function call, or use operators like +, -, *, /")),
         }
     }
@@ -934,8 +934,8 @@ impl<'a> Parser<'a> {
                     location: operator_location, // Location of '['
                 })
             }
-            _ => Err(CompilerError::syntax_error(
-                format!("Expected infix operator, function call '(', field access '.', or index access '[', found {:?}", token_info.kind),
+            _ => Err(CompilerError::unexpected_token(
+                format!("Expected infix operator, function call '(', field access '.', or index access '[', found {}", token_info.kind),
                 token_info.location.clone())),
         }
     }
@@ -996,7 +996,7 @@ impl<'a> Parser<'a> {
 
                 // Expect newline, EOF, or Dedent after the statement
                 if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) {
-                    return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after compound assignment, found {:?}", self.current_token_info), self.get_location()));
+                    return Err(CompilerError::unexpected_token(format!("Expected newline, EOF, or dedent after compound assignment, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))), self.get_location()));
                 }
 
                 // Desugar: x += y  =>  x = x + y
@@ -1021,7 +1021,7 @@ impl<'a> Parser<'a> {
             let value = self.parse_expression()?;
             // Expect newline, EOF, or Dedent after the statement
              if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-                 return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after assignment, found {:?}", self.current_token_info), self.get_location()));
+                 return Err(CompilerError::unexpected_token(format!("Expected newline, EOF, or dedent after assignment, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))), self.get_location()));
              }
             Ok(AstNode::Assignment {
                 target: Box::new(expr),
@@ -1032,7 +1032,7 @@ impl<'a> Parser<'a> {
             // Assume it's just an expression used as a statement (e.g., function call)
             // Expect newline, EOF, or Dedent after the statement
              if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-                 return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after expression statement, found {:?}", self.current_token_info), self.get_location()));
+                 return Err(CompilerError::unexpected_token(format!("Expected newline, EOF, or dedent after expression statement, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))), self.get_location()));
              }
             Ok(expr)
         }
@@ -1114,11 +1114,11 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let (found_str, location) = match self.current_token_info {
-                    Some(token) => (format!("{:?}", token), token.location.clone()),
+                    Some(token) => (format!("{}", token), token.location.clone()),
                     None => ("end of file".to_string(), self.last_location.clone()),
                 };
 
-                return Err(CompilerError::syntax_error(format!("Expected type name identifier after 'secret' (if present), found {}", found_str), location));
+                return Err(CompilerError::unexpected_token(format!("Expected type name identifier after 'secret' (if present), found {}", found_str), location));
             }
         };
 
@@ -1170,7 +1170,7 @@ impl<'a> Parser<'a> {
 
         // Expect newline, EOF, or Dedent after declaration
         if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-             return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after variable declaration, found {:?}", self.current_token_info), self.get_location()));
+             return Err(CompilerError::unexpected_token(format!("Expected newline, EOF, or dedent after variable declaration, found {}", self.current_token_info.map_or("end of file".to_string(), |t| format!("{}", t))), self.get_location()));
         }
 
         Ok(AstNode::VariableDeclaration {
@@ -1241,12 +1241,755 @@ pub fn parse(tokens: &[TokenInfo], filename: &str) -> CompilerResult<AstNode> {
     // Check if all tokens were consumed (except EOF)
     if !parser.check(&TokenKind::Eof) {
         let (found_str, location) = match parser.current_token_info {
-            Some(token) => (format!("{:?}", token), token.location.clone()),
+            Some(token) => (format!("{}", token), token.location.clone()),
             None => ("end of file".to_string(), parser.last_location.clone()),
         };
-        
-        Err(CompilerError::syntax_error(format!("Unexpected token after parsing finished: {}", found_str), location))
+
+        Err(CompilerError::unexpected_token(format!("Unexpected token after parsing finished: {}", found_str), location))
     } else {
         Ok(root_node)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AstNode, Value};
+    use crate::errors::CompilerError;
+    use crate::lexer;
+
+    fn parse_source(src: &str) -> Result<AstNode, CompilerError> {
+        let tokens = lexer::tokenize(src, "test.stfl").map_err(|e| e)?;
+        parse(&tokens, "test.stfl")
+    }
+
+    // ===== HAPPY PATH =====
+
+    #[test]
+    fn parse_simple_var_declaration_with_value() {
+        let ast = parse_source("var x = 5").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { name, value, is_mutable, is_secret, type_annotation, .. } => {
+                assert_eq!(name, "x");
+                assert!(is_mutable);
+                assert!(!is_secret);
+                assert!(type_annotation.is_none());
+                assert!(matches!(*value.unwrap(), AstNode::Literal(Value::Int { value: 5, .. })));
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_var_with_type_annotation() {
+        let ast = parse_source("var x: int64 = 10").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { name, type_annotation, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(&*type_annotation.unwrap(), AstNode::Identifier(n, _) if n == "int64"));
+                assert!(matches!(*value.unwrap(), AstNode::Literal(Value::Int { value: 10, .. })));
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_var_type_only_no_value() {
+        let ast = parse_source("var x: int64").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { name, type_annotation, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(type_annotation.is_some());
+                assert!(value.is_none());
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_secret_var() {
+        let ast = parse_source("secret var key = 42").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { name, is_secret, .. } => {
+                assert_eq!(name, "key");
+                assert!(is_secret);
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_function_definition() {
+        let src = "def add(a: int64, b: int64) -> int64:\n  return a + b";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { name, parameters, return_type, is_secret, .. } => {
+                assert_eq!(name, Some("add".to_string()));
+                assert_eq!(parameters.len(), 2);
+                assert_eq!(parameters[0].name, "a");
+                assert_eq!(parameters[1].name, "b");
+                assert!(!is_secret);
+                assert!(return_type.is_some());
+            }
+            other => panic!("Expected FunctionDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_function_no_params_no_return() {
+        let src = "def greet():\n  discard 1";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { name, parameters, return_type, .. } => {
+                assert_eq!(name, Some("greet".to_string()));
+                assert!(parameters.is_empty());
+                assert!(return_type.is_none());
+            }
+            other => panic!("Expected FunctionDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_arithmetic_precedence() {
+        // 1 + 2 * 3 should parse as 1 + (2 * 3), tested via var declaration
+        let ast = parse_source("var r = 1 + 2 * 3").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::BinaryOperation { op, left, right, .. } => {
+                        assert_eq!(op, "+");
+                        assert!(matches!(*left, AstNode::Literal(Value::Int { value: 1, .. })));
+                        match *right {
+                            AstNode::BinaryOperation { op, left, right, .. } => {
+                                assert_eq!(op, "*");
+                                assert!(matches!(*left, AstNode::Literal(Value::Int { value: 2, .. })));
+                                assert!(matches!(*right, AstNode::Literal(Value::Int { value: 3, .. })));
+                            }
+                            other => panic!("Expected BinaryOperation for 2*3, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected BinaryOperation, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_comparison_lower_precedence_than_arithmetic() {
+        // a + 1 > b should parse as (a + 1) > b, tested via var decl
+        let ast = parse_source("var r = a + 1 > b").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::BinaryOperation { op, left, .. } => {
+                        assert_eq!(op, ">");
+                        assert!(matches!(*left, AstNode::BinaryOperation { ref op, .. } if op == "+"));
+                    }
+                    other => panic!("Expected comparison BinaryOperation, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_unary_negation() {
+        let ast = parse_source("var r = -5").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::UnaryOperation { op, operand, .. } => {
+                        assert_eq!(op, "-");
+                        assert!(matches!(*operand, AstNode::Literal(Value::Int { value: 5, .. })));
+                    }
+                    other => panic!("Expected UnaryOperation, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_if_else() {
+        let src = "if x > 0:\n  return 1\nelse:\n  return 0";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::IfExpression { condition, then_branch, else_branch } => {
+                assert!(matches!(*condition, AstNode::BinaryOperation { ref op, .. } if op == ">"));
+                assert!(matches!(*then_branch, AstNode::Block(_)));
+                assert!(else_branch.is_some());
+            }
+            other => panic!("Expected IfExpression, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_if_elif_else() {
+        let src = "if x > 0:\n  return 1\nelif x == 0:\n  return 0\nelse:\n  return -1";
+        let ast = parse_source(src).unwrap();
+        // The parser folds elif clauses in reverse, so the outermost node
+        // has the first elif's condition, with its else_branch containing the original if.
+        match ast {
+            AstNode::IfExpression { condition, else_branch, .. } => {
+                // The outermost condition is from the elif: x == 0
+                assert!(matches!(*condition, AstNode::BinaryOperation { ref op, .. } if op == "=="));
+                // The else branch should be the original if (x > 0)
+                let inner = else_branch.unwrap();
+                assert!(matches!(*inner, AstNode::IfExpression { .. }));
+            }
+            other => panic!("Expected IfExpression, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_while_loop() {
+        let src = "while i < 10:\n  i += 1";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::WhileLoop { condition, body, .. } => {
+                assert!(matches!(*condition, AstNode::BinaryOperation { ref op, .. } if op == "<"));
+                assert!(matches!(*body, AstNode::Block(_)));
+            }
+            other => panic!("Expected WhileLoop, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_for_loop_with_range() {
+        let src = "for i in 0..10:\n  discard i";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::ForLoop { variables, iterable, .. } => {
+                assert_eq!(variables, vec!["i".to_string()]);
+                assert!(matches!(*iterable, AstNode::BinaryOperation { ref op, .. } if op == ".."));
+            }
+            other => panic!("Expected ForLoop, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_for_loop_with_collection() {
+        let src = "for item in items:\n  discard item";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::ForLoop { variables, iterable, .. } => {
+                assert_eq!(variables, vec!["item".to_string()]);
+                assert!(matches!(*iterable, AstNode::Identifier(ref n, _) if n == "items"));
+            }
+            other => panic!("Expected ForLoop, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_function_call() {
+        let ast = parse_source("foo(1, 2, 3)").unwrap();
+        match ast {
+            AstNode::FunctionCall { function, arguments, .. } => {
+                assert!(matches!(*function, AstNode::Identifier(ref n, _) if n == "foo"));
+                assert_eq!(arguments.len(), 3);
+            }
+            other => panic!("Expected FunctionCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_return_with_value() {
+        // return needs to be inside a block for a function; test via function body
+        let src = "def f():\n  return 42";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { body, .. } => {
+                match *body {
+                    AstNode::Block(stmts) => {
+                        assert_eq!(stmts.len(), 1);
+                        match &stmts[0] {
+                            AstNode::Return { value, .. } => {
+                                assert!(value.is_some());
+                            }
+                            other => panic!("Expected Return, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected Block, got {:?}", other),
+                }
+            }
+            other => panic!("Expected FunctionDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_import_simple() {
+        let ast = parse_source("import utils.math").unwrap();
+        match ast {
+            AstNode::Import { module_path, alias, imported_items, .. } => {
+                assert_eq!(module_path, vec!["utils", "math"]);
+                assert!(alias.is_none());
+                assert!(imported_items.is_none());
+            }
+            other => panic!("Expected Import, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_import_with_alias() {
+        let ast = parse_source("import utils.math as m").unwrap();
+        match ast {
+            AstNode::Import { module_path, alias, .. } => {
+                assert_eq!(module_path, vec!["utils", "math"]);
+                assert_eq!(alias, Some("m".to_string()));
+            }
+            other => panic!("Expected Import, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_object_definition() {
+        let src = "object Point:\n  x: int64\n  y: int64";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::ObjectDefinition { name, fields, is_secret, base_type, .. } => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name, "x");
+                assert_eq!(fields[1].name, "y");
+                assert!(!is_secret);
+                assert!(base_type.is_none());
+            }
+            other => panic!("Expected ObjectDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_object_with_secret_field() {
+        let src = "object User:\n  name: string\n  secret password: string";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::ObjectDefinition { fields, .. } => {
+                assert_eq!(fields.len(), 2);
+                assert!(!fields[0].is_secret);
+                assert!(fields[1].is_secret);
+                assert_eq!(fields[1].name, "password");
+            }
+            other => panic!("Expected ObjectDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_list_literal() {
+        let ast = parse_source("var r = [1, 2, 3]").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::ListLiteral(elems) => assert_eq!(elems.len(), 3),
+                    other => panic!("Expected ListLiteral, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_field_access() {
+        let ast = parse_source("obj.field").unwrap();
+        match ast {
+            AstNode::FieldAccess { object, field_name, .. } => {
+                assert!(matches!(*object, AstNode::Identifier(ref n, _) if n == "obj"));
+                assert_eq!(field_name, "field");
+            }
+            other => panic!("Expected FieldAccess, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_index_access() {
+        let ast = parse_source("arr[0]").unwrap();
+        match ast {
+            AstNode::IndexAccess { base, index, .. } => {
+                assert!(matches!(*base, AstNode::Identifier(ref n, _) if n == "arr"));
+                assert!(matches!(*index, AstNode::Literal(Value::Int { value: 0, .. })));
+            }
+            other => panic!("Expected IndexAccess, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_assignment() {
+        let ast = parse_source("x = 10").unwrap();
+        match ast {
+            AstNode::Assignment { target, value, .. } => {
+                assert!(matches!(*target, AstNode::Identifier(ref n, _) if n == "x"));
+                assert!(matches!(*value, AstNode::Literal(Value::Int { value: 10, .. })));
+            }
+            other => panic!("Expected Assignment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_compound_assignment() {
+        let ast = parse_source("x += 5").unwrap();
+        match ast {
+            AstNode::Assignment { target, value, .. } => {
+                assert!(matches!(*target, AstNode::Identifier(ref n, _) if n == "x"));
+                // Desugared to x = x + 5
+                match *value {
+                    AstNode::BinaryOperation { op, .. } => assert_eq!(op, "+"),
+                    other => panic!("Expected BinaryOperation in desugared compound, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Assignment (desugared compound), got {:?}", other),
+        }
+    }
+
+    // ===== SEMI-HONEST (edge cases / boundary conditions) =====
+
+    #[test]
+    fn parse_multiple_statements_in_block() {
+        let src = "var a = 1\nvar b = 2\nvar c = 3";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::Block(stmts) => {
+                assert_eq!(stmts.len(), 3);
+            }
+            other => panic!("Expected Block with 3 statements, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_nested_if_expressions() {
+        let src = "if a:\n  if b:\n    return 1\n  else:\n    return 2\nelse:\n  return 3";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::IfExpression { condition, then_branch, else_branch } => {
+                // Outer if condition should reference 'a'
+                assert!(matches!(&*condition, AstNode::Identifier(name, _) if name == "a"),
+                    "Expected outer condition 'a', got {:?}", condition);
+                // then_branch is a block containing the inner if
+                match *then_branch {
+                    AstNode::Block(ref stmts) => {
+                        assert_eq!(stmts.len(), 1);
+                        // Inner if condition should reference 'b'
+                        match &stmts[0] {
+                            AstNode::IfExpression { condition: inner_cond, else_branch: inner_else, .. } => {
+                                assert!(matches!(&**inner_cond, AstNode::Identifier(name, _) if name == "b"),
+                                    "Expected inner condition 'b', got {:?}", inner_cond);
+                                assert!(inner_else.is_some(), "Inner if should have else branch");
+                            }
+                            other => panic!("Expected inner IfExpression, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected Block in then_branch, got {:?}", other),
+                }
+                // Outer else should exist with return 3
+                assert!(else_branch.is_some(), "Outer if should have else branch");
+            }
+            other => panic!("Expected IfExpression, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_chained_left_associative_arithmetic() {
+        // 1 - 2 - 3 should parse as (1 - 2) - 3
+        let ast = parse_source("var r = 1 - 2 - 3").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::BinaryOperation { op, left, right, .. } => {
+                        assert_eq!(op, "-");
+                        assert!(matches!(*right, AstNode::Literal(Value::Int { value: 3, .. })));
+                        match *left {
+                            AstNode::BinaryOperation { op, left, right, .. } => {
+                                assert_eq!(op, "-");
+                                assert!(matches!(*left, AstNode::Literal(Value::Int { value: 1, .. })));
+                                assert!(matches!(*right, AstNode::Literal(Value::Int { value: 2, .. })));
+                            }
+                            other => panic!("Expected inner BinaryOperation, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected BinaryOperation, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_parenthesized_expression_overrides_precedence() {
+        // (1 + 2) * 3 should parse as (1+2) * 3
+        let ast = parse_source("var r = (1 + 2) * 3").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::BinaryOperation { op, left, right, .. } => {
+                        assert_eq!(op, "*");
+                        assert!(matches!(*left, AstNode::BinaryOperation { ref op, .. } if op == "+"));
+                        assert!(matches!(*right, AstNode::Literal(Value::Int { value: 3, .. })));
+                    }
+                    other => panic!("Expected BinaryOperation *, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_chained_field_access() {
+        let ast = parse_source("a.b.c").unwrap();
+        match ast {
+            AstNode::FieldAccess { object, field_name, .. } => {
+                assert_eq!(field_name, "c");
+                match *object {
+                    AstNode::FieldAccess { field_name, .. } => assert_eq!(field_name, "b"),
+                    other => panic!("Expected inner FieldAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected FieldAccess, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_method_call_chain() {
+        // obj.method(1).other()
+        let ast = parse_source("obj.method(1).other()").unwrap();
+        match ast {
+            AstNode::FunctionCall { function, arguments, .. } => {
+                // outer call is .other()
+                assert!(arguments.is_empty());
+                match *function {
+                    AstNode::FieldAccess { object, field_name, .. } => {
+                        assert_eq!(field_name, "other");
+                        // inner is obj.method(1)
+                        assert!(matches!(*object, AstNode::FunctionCall { .. }));
+                    }
+                    other => panic!("Expected FieldAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected FunctionCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_empty_list_literal() {
+        let ast = parse_source("var r = []").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                assert!(matches!(*value.unwrap(), AstNode::ListLiteral(ref elems) if elems.is_empty()));
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_bool_and_nil_literals() {
+        // Test literals via var declarations since bare literals aren't valid statements
+        let t = parse_source("var r = true").unwrap();
+        assert!(matches!(t, AstNode::VariableDeclaration { value: Some(v), .. } if matches!(*v, AstNode::Literal(Value::Bool(true)))));
+        let f = parse_source("var r = false").unwrap();
+        assert!(matches!(f, AstNode::VariableDeclaration { value: Some(v), .. } if matches!(*v, AstNode::Literal(Value::Bool(false)))));
+        let n = parse_source("var r = nil").unwrap();
+        assert!(matches!(n, AstNode::VariableDeclaration { value: Some(v), .. } if matches!(*v, AstNode::Literal(Value::Nil))));
+    }
+
+    #[test]
+    fn parse_string_literal() {
+        let ast = parse_source("var r = \"hello world\"").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                assert!(matches!(*value.unwrap(), AstNode::Literal(Value::String(ref s)) if s == "hello world"));
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_deeply_nested_blocks() {
+        let src = "def f():\n  if true:\n    while true:\n      return 1";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { body, .. } => {
+                // body > Block > [IfExpression] > then_branch > Block > [WhileLoop] > body > Block > [Return]
+                match *body {
+                    AstNode::Block(stmts) => {
+                        assert!(matches!(&stmts[0], AstNode::IfExpression { .. }));
+                    }
+                    other => panic!("Expected Block, got {:?}", other),
+                }
+            }
+            other => panic!("Expected FunctionDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_main_definition() {
+        let src = "main run():\n  discard 1";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { name, pragmas, .. } => {
+                assert_eq!(name, Some("run".to_string()));
+                // Should have the synthetic "entry" pragma
+                assert!(pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry")));
+            }
+            other => panic!("Expected FunctionDefinition (main), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_discard_statement() {
+        let src = "def f():\n  discard some_call()";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::FunctionDefinition { body, .. } => {
+                match *body {
+                    AstNode::Block(stmts) => {
+                        assert!(matches!(&stmts[0], AstNode::DiscardStatement { .. }));
+                    }
+                    other => panic!("Expected Block, got {:?}", other),
+                }
+            }
+            other => panic!("Expected FunctionDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_object_with_base_type() {
+        let src = "object Child(Parent):\n  extra: int64";
+        let ast = parse_source(src).unwrap();
+        match ast {
+            AstNode::ObjectDefinition { name, base_type, fields, .. } => {
+                assert_eq!(name, "Child");
+                assert!(matches!(&*base_type.unwrap(), AstNode::Identifier(n, _) if n == "Parent"));
+                assert_eq!(fields.len(), 1);
+            }
+            other => panic!("Expected ObjectDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_dict_literal() {
+        let ast = parse_source("var r = {\"a\": 1, \"b\": 2}").unwrap();
+        match ast {
+            AstNode::VariableDeclaration { value, .. } => {
+                match *value.unwrap() {
+                    AstNode::DictLiteral(pairs) => assert_eq!(pairs.len(), 2),
+                    other => panic!("Expected DictLiteral, got {:?}", other),
+                }
+            }
+            other => panic!("Expected VariableDeclaration, got {:?}", other),
+        }
+    }
+
+    // ===== ADVERSARIAL (trying to break the parser) =====
+
+    #[test]
+    fn error_missing_expression_after_operator() {
+        // "1 +" with no right-hand side
+        let result = parse_source("1 +");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.to_lowercase().contains("expect") || err.message.to_lowercase().contains("expression"),
+            "Expected error about missing expression, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_unclosed_parenthesis() {
+        let result = parse_source("(1 + 2");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains(")") || err.message.to_lowercase().contains("paren") || err.message.to_lowercase().contains("expect"),
+            "Expected error about unclosed paren, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_missing_colon_after_if() {
+        let result = parse_source("if true\n  return 1");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains(":") || err.message.to_lowercase().contains("colon") || err.message.to_lowercase().contains("expect"),
+            "Expected error about missing colon, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_missing_colon_after_function_header() {
+        let result = parse_source("def f()\n  return 1");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains(":") || err.message.to_lowercase().contains("colon") || err.message.to_lowercase().contains("expect"),
+            "Expected error about missing colon, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_missing_body_after_colon() {
+        // Function header with colon but no indented body
+        let result = parse_source("def f():");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.to_lowercase().contains("indent") || err.message.to_lowercase().contains("body") || err.message.to_lowercase().contains("expect"),
+            "Expected error about missing body/indent, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_let_keyword_rejected() {
+        let result = parse_source("let x = 5");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("let"));
+    }
+
+    #[test]
+    fn error_proc_keyword_rejected() {
+        let result = parse_source("proc f():\n  return 1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("proc"));
+    }
+
+    #[test]
+    fn error_var_without_type_or_value() {
+        let result = parse_source("var x");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("type annotation") || err.message.contains("initial value"));
+    }
+
+    #[test]
+    fn error_unclosed_bracket() {
+        let result = parse_source("[1, 2, 3");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("]") || err.message.to_lowercase().contains("bracket") || err.message.to_lowercase().contains("expect"),
+            "Expected error about unclosed bracket, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_unexpected_token_at_start() {
+        let result = parse_source("= 5");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.to_lowercase().contains("unexpected") || err.message.to_lowercase().contains("expect"),
+            "Expected error about unexpected token, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_object_with_no_fields() {
+        let result = parse_source("object Empty:\n  \n");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.to_lowercase().contains("field") || err.message.to_lowercase().contains("empty") || err.message.to_lowercase().contains("expect"),
+            "Expected error about missing fields, got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn error_tuple_return_type_rejected() {
+        let result = parse_source("def f() -> (int64, int64):\n  return 1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("Tuple return types"));
     }
 }

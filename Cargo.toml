@@ -9,8 +9,13 @@ edition = "2021"
 name = "stoffellang"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["honeybadger", "adkg"]
+honeybadger = []
+adkg = []
+
 [dependencies]
-stoffel-vm-types = { version = "0.1.0", git = "https://github.com/Stoffel-Labs/StoffelVM.git"}
+stoffel-vm-types = { version = "0.1.0", path = "../StoffelVM/crates/stoffel-vm-types" }
 colored = "3.0.0"
 edit-distance = "2.1.0"
 clap = { version = "4.5.4", features = ["derive"] }
@@ -39,3 +44,7 @@ path = "tests/rust/suggestion_integration_tests.rs"
 [[test]]
 name = "user_defined_object_tests"
 path = "tests/rust/user_defined_object_tests.rs"
+
+[patch."https://github.com/Stoffel-Labs/mpc-protocols.git"]
+stoffelmpc-mpc = { path = "../mpc-protocols/mpc" }
+stoffelmpc-network = { path = "../mpc-protocols/network" }

@@ -39,109 +39,7 @@ pub enum Constant {
     Share(crate::core_types::ShareType, Vec<u8>),
 }
 
-#[repr(u8)]
-pub enum ReducedOpcode {
-    // LD r1 [sp+0]
-    LD = 0x00,
-    // LDI r1 10
-    LDI = 0x01,
-    // MOV r1 r2
-    MOV = 0x02,
-    // ADD r1, r2, r3
-    ADD = 0x03,
-    // SUB r1, r2, r3
-    SUB = 0x04,
-    // MUL r1, r2, r3
-    MUL = 0x05,
-    // DIV r1, r2, r3
-    DIV = 0x06,
-    // MOD r1, r2, r3
-    MOD = 0x07,
-    // AND r1, r2, r3
-    AND = 0x08,
-    // OR r1, r2, r3
-    OR = 0x09,
-    // XOR r1, r2, r3
-    XOR = 0x0A,
-    // NOT r1, r2
-    NOT = 0x0B,
-    // SHL <target>, <source>, <amount>
-    // SHL r1, r2, 1
-    SHL = 0x0C,
-    // SHR <target>, <source>, <amount>
-    // SHR r1, r2, 1
-    SHR = 0x0D,
-    // JMP <jump_to>
-    JMP = 0x0E,
-    // JMPEQ <jump_to>
-    JMPEQ = 0x0F,
-    // JMPNEQ <jump_to>
-    JMPNEQ = 0x10,
-    // CALL <function>
-    CALL = 0x11,
-    // RET r1
-    RET = 0x12,
-    // PUSHARG r1
-    PUSHARG = 0x13,
-    // CMP r1 r2
-    CMP = 0x14,
-    // JMPLT <jump_to>
-    JMPLT = 0x15,
-    // JMPGT <jump_to>
-    JMPGT = 0x16,
-}
-
-/// Represents different kinds of operands for instructions.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Operand {
-    Register(usize),                   // A register (r0, r1, etc.)
-    StackAddr(i32),                    // Stack pointer offset [sp+n]
-    Immediate(Value),                  // An immediate value (constant)
-    Label(String),                     // A jump label
-}
-
-/// Resolved instruction with numeric indices instead of strings
-///
-/// This is an optimized representation of instructions used during execution.
-/// String identifiers (like function names and labels) are replaced with numeric indices,
-/// allowing for faster execution without string lookups.
-///
-/// This representation is generated from the symbolic `Instruction` enum during function
-/// registration and is used by the VM's execution engine.
-#[derive(Debug, Clone, Copy)]
-pub enum ResolvedInstruction {
-    // Load value from stack to register
-    LD(usize, i32),                      // LD r1, [sp+0]
-    // Load immediate value to register
-    LDI(usize, usize),                   // LDI r1, const_idx (register, constant index)
-    // Move value from one register to another
-    MOV(usize, usize),                   // MOV r1, r2
-    // Arithmetic operations
-    ADD(usize, usize, usize),            // ADD r1, r2, r3
-    SUB(usize, usize, usize),            // SUB r1, r2, r3
-    MUL(usize, usize, usize),            // MUL r1, r2, r3
-    DIV(usize, usize, usize),            // DIV r1, r2, r3
-    MOD(usize, usize, usize),            // MOD r1, r2, r3
-    // Bitwise operations
-    AND(usize, usize, usize),            // AND r1, r2, r3
-    OR(usize, usize, usize),             // OR r1, r2, r3
-    XOR(usize, usize, usize),            // XOR r1, r2, r3
-    NOT(usize, usize),                   // NOT r1, r2
-    SHL(usize, usize, usize),            // SHL r1, r2, r3
-    SHR(usize, usize, usize),            // SHR r1, r2, r3
-    // Control flow
-    JMP(usize),                          // JMP to instruction index
-    JMPEQ(usize),                        // JMPEQ to instruction index
-    JMPNEQ(usize),                       // JMPNEQ to instruction index
-    JMPLT(usize),                        // JMPLT to instruction index
-    JMPGT(usize),                        // JMPGT to instruction index
-    // Function handling
-    CALL(usize),                         // CALL function index
-    RET(usize),                          // RET r1
-    PUSHARG(usize),                      // PUSHARG r1
-    // Comparison
-    CMP(usize, usize),                   // CMP r1, r2
-}
+pub(crate) use stoffel_vm_types::instructions::ResolvedInstruction;
 
 #[derive(Debug, Clone, Default)]
 pub struct BytecodeChunk {
@@ -297,5 +195,233 @@ impl BytecodeChunk {
         }
         
         Ok(resolved)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    // ===================== Happy Path =====================
+
+    #[test]
+    fn new_chunk_is_empty() {
+        let chunk = BytecodeChunk::new();
+        assert!(chunk.instructions.is_empty());
+        assert!(chunk.constants.is_empty());
+        assert!(chunk.labels.is_empty());
+    }
+
+    #[test]
+    fn add_instruction_returns_index_and_stores() {
+        let mut chunk = BytecodeChunk::new();
+        let idx0 = chunk.add_instruction(Instruction::LDI(0, Value::I64(42)));
+        let idx1 = chunk.add_instruction(Instruction::ADD(2, 0, 1));
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(chunk.instructions.len(), 2);
+    }
+
+    #[test]
+    fn add_constant_returns_index_and_stores() {
+        let mut chunk = BytecodeChunk::new();
+        let idx0 = chunk.add_constant(Constant::I64(10));
+        let idx1 = chunk.add_constant(Constant::String("hello".into()));
+        let idx2 = chunk.add_constant(Constant::Bool(true));
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(idx2, 2);
+        assert_eq!(chunk.constants.len(), 3);
+        assert_eq!(chunk.constants[0], Constant::I64(10));
+        assert_eq!(chunk.constants[2], Constant::Bool(true));
+    }
+
+    #[test]
+    fn add_label_records_current_position() {
+        let mut chunk = BytecodeChunk::new();
+        // Label before any instructions points to index 0
+        let pos0 = chunk.add_label("start".into());
+        assert_eq!(pos0, 0);
+
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(1)));
+        chunk.add_instruction(Instruction::LDI(1, Value::I64(2)));
+
+        // Label after 2 instructions points to index 2
+        let pos2 = chunk.add_label("after_two".into());
+        assert_eq!(pos2, 2);
+        assert_eq!(chunk.labels["start"], 0);
+        assert_eq!(chunk.labels["after_two"], 2);
+    }
+
+    #[test]
+    fn compiled_program_default_has_empty_chunks() {
+        let program = CompiledProgram::default();
+        assert!(program.main_chunk.instructions.is_empty());
+        assert!(program.function_chunks.is_empty());
+    }
+
+    #[test]
+    fn compiled_program_with_function_chunks() {
+        let mut program = CompiledProgram::default();
+        let mut func_chunk = BytecodeChunk::new();
+        func_chunk.add_instruction(Instruction::RET(0));
+        program.function_chunks.insert("my_func".into(), func_chunk);
+        assert_eq!(program.function_chunks.len(), 1);
+        assert!(program.function_chunks.contains_key("my_func"));
+    }
+
+    #[test]
+    fn resolve_instructions_arithmetic() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::ADD(0, 1, 2));
+        chunk.add_instruction(Instruction::SUB(3, 0, 1));
+        chunk.add_instruction(Instruction::MUL(4, 2, 3));
+        chunk.add_instruction(Instruction::MOV(5, 4));
+        chunk.add_instruction(Instruction::RET(5));
+
+        let constant_map = HashMap::new();
+        let function_map = HashMap::new();
+        let resolved = chunk.resolve_instructions(&constant_map, &function_map).unwrap();
+        assert_eq!(resolved.len(), 5);
+        assert!(matches!(resolved[0], ResolvedInstruction::ADD(0, 1, 2)));
+        assert!(matches!(resolved[1], ResolvedInstruction::SUB(3, 0, 1)));
+        assert!(matches!(resolved[4], ResolvedInstruction::RET(5)));
+    }
+
+    #[test]
+    fn resolve_instructions_with_ldi_and_constants() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(42)));
+        chunk.add_instruction(Instruction::LDI(1, Value::Bool(true)));
+
+        let mut constant_map: HashMap<Value, usize> = HashMap::new();
+        constant_map.insert(Value::I64(42), 0);
+        constant_map.insert(Value::Bool(true), 1);
+        let function_map = HashMap::new();
+
+        let resolved = chunk.resolve_instructions(&constant_map, &function_map).unwrap();
+        assert!(matches!(resolved[0], ResolvedInstruction::LDI(0, 0)));
+        assert!(matches!(resolved[1], ResolvedInstruction::LDI(1, 1)));
+    }
+
+    #[test]
+    fn resolve_instructions_with_labels() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(1)));
+        chunk.add_instruction(Instruction::CMP(0, 1));
+        chunk.add_instruction(Instruction::JMPEQ("target".into()));
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(2)));
+        chunk.add_label("target".into()); // Points to instruction index 4
+        chunk.add_instruction(Instruction::RET(0));
+
+        let mut constant_map: HashMap<Value, usize> = HashMap::new();
+        constant_map.insert(Value::I64(1), 0);
+        constant_map.insert(Value::I64(2), 1);
+        let function_map = HashMap::new();
+
+        let resolved = chunk.resolve_instructions(&constant_map, &function_map).unwrap();
+        assert!(matches!(resolved[2], ResolvedInstruction::JMPEQ(4)));
+    }
+
+    #[test]
+    fn resolve_instructions_with_call() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::PUSHARG(0));
+        chunk.add_instruction(Instruction::CALL("foo".into()));
+
+        let constant_map = HashMap::new();
+        let mut function_map = HashMap::new();
+        function_map.insert("foo".into(), 3);
+
+        let resolved = chunk.resolve_instructions(&constant_map, &function_map).unwrap();
+        assert!(matches!(resolved[0], ResolvedInstruction::PUSHARG(0)));
+        assert!(matches!(resolved[1], ResolvedInstruction::CALL(3)));
+    }
+
+    // ===================== Semi-honest =====================
+
+    #[test]
+    fn empty_chunk_resolves_to_empty() {
+        let chunk = BytecodeChunk::new();
+        let resolved = chunk.resolve_instructions(&HashMap::new(), &HashMap::new()).unwrap();
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn chunk_with_only_constants_no_instructions() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_constant(Constant::I64(1));
+        chunk.add_constant(Constant::Bool(false));
+        assert_eq!(chunk.constants.len(), 2);
+        assert!(chunk.instructions.is_empty());
+    }
+
+    #[test]
+    fn multiple_labels_to_same_instruction() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(0)));
+        // Both labels point to instruction index 1
+        chunk.add_label("label_a".into());
+        chunk.add_label("label_b".into());
+        chunk.add_instruction(Instruction::RET(0));
+
+        assert_eq!(chunk.labels["label_a"], 1);
+        assert_eq!(chunk.labels["label_b"], 1);
+    }
+
+    #[test]
+    fn large_constant_pool() {
+        let mut chunk = BytecodeChunk::new();
+        for i in 0..1000 {
+            let idx = chunk.add_constant(Constant::I64(i));
+            assert_eq!(idx, i as usize);
+        }
+        assert_eq!(chunk.constants.len(), 1000);
+    }
+
+    // ===================== Adversarial =====================
+
+    #[test]
+    fn resolve_fails_on_missing_label() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::JMP("nonexistent".into()));
+        let result = chunk.resolve_instructions(&HashMap::new(), &HashMap::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Label not found"));
+    }
+
+    #[test]
+    fn resolve_fails_on_missing_function() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::CALL("unknown_func".into()));
+        let result = chunk.resolve_instructions(&HashMap::new(), &HashMap::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Function not found"));
+    }
+
+    #[test]
+    fn resolve_fails_on_missing_constant_in_ldi() {
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(999)));
+        // No constant_map entry for I64(999)
+        let result = chunk.resolve_instructions(&HashMap::new(), &HashMap::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Constant not found"));
+    }
+
+    #[test]
+    fn duplicate_label_name_overwrites_silently() {
+        // NOTE: add_label uses HashMap::insert which silently overwrites.
+        // This test documents the current behavior (last-wins) rather than
+        // asserting it's desirable. A future improvement could detect duplicates.
+        let mut chunk = BytecodeChunk::new();
+        chunk.add_instruction(Instruction::LDI(0, Value::I64(0)));
+        chunk.add_label("dup".into()); // index 1
+        chunk.add_instruction(Instruction::LDI(1, Value::I64(1)));
+        chunk.add_label("dup".into()); // index 2, overwrites
+        // Verify last-wins behavior (current implementation)
+        assert_eq!(chunk.labels["dup"], 2);
+        assert_eq!(chunk.labels.len(), 1, "Should have exactly one label entry");
     }
 }

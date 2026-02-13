@@ -84,7 +84,7 @@ pub fn compile(
     }
 
     // 4. Semantic Analysis (Symbol Table, Type Checking)
-    let analyzed_ast = match semantic::analyze(transformed_ast, &mut error_reporter, filename) {
+    let analyzed_ast = match semantic::analyze(transformed_ast, &mut error_reporter, filename, source) {
         Ok(ast) => ast,
         Err(_) => {
             // Errors were already added to the reporter by the analyzer

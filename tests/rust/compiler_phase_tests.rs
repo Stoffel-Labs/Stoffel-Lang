@@ -35,7 +35,7 @@ fn analyze_source(source: &str) -> Result<(), Vec<String>> {
     let ast = parse(&tokens, "test.stfl").map_err(|e| vec![e.message])?;
     let transformed = transform_ufcs(ast);
     let mut reporter = ErrorReporter::new();
-    analyze(transformed, &mut reporter, "test.stfl")
+    analyze(transformed, &mut reporter, "test.stfl", source)
         .map_err(|_| reporter.get_all().iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
     Ok(())
 }

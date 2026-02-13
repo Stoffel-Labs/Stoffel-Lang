@@ -49,10 +49,13 @@ impl CodeGenerator {
         known_builtins.insert("set_field".to_string());
         known_builtins.insert("array_push".to_string());
         known_builtins.insert("array_length".to_string());
-        // ClientStore builtin object methods (qualified names)
-        known_builtins.insert("ClientStore.take_share".to_string());
-        known_builtins.insert("ClientStore.take_share_fixed".to_string());
-        known_builtins.insert("ClientStore.get_number_clients".to_string());
+        // ClientStore builtin object methods (HoneyBadger only - requires client input)
+        #[cfg(feature = "honeybadger")]
+        {
+            known_builtins.insert("ClientStore.take_share".to_string());
+            known_builtins.insert("ClientStore.take_share_fixed".to_string());
+            known_builtins.insert("ClientStore.get_number_clients".to_string());
+        }
 
         // Share builtin object methods (matches VM mpc_builtins.rs)
         known_builtins.insert("Share.from_clear".to_string());
@@ -63,9 +66,13 @@ impl CodeGenerator {
         known_builtins.insert("Share.neg".to_string());
         known_builtins.insert("Share.add_scalar".to_string());
         known_builtins.insert("Share.mul_scalar".to_string());
-        known_builtins.insert("Share.mul".to_string());
+        // Share operations requiring Beaver triple multiplication (HoneyBadger only)
+        #[cfg(feature = "honeybadger")]
+        {
+            known_builtins.insert("Share.mul".to_string());
+            known_builtins.insert("Share.send_to_client".to_string());
+        }
         known_builtins.insert("Share.open".to_string());
-        known_builtins.insert("Share.send_to_client".to_string());
         known_builtins.insert("Share.interpolate_local".to_string());
         known_builtins.insert("Share.get_type".to_string());
         known_builtins.insert("Share.get_party_id".to_string());
@@ -76,6 +83,10 @@ impl CodeGenerator {
         known_builtins.insert("Mpc.threshold".to_string());
         known_builtins.insert("Mpc.is_ready".to_string());
         known_builtins.insert("Mpc.instance_id".to_string());
+        known_builtins.insert("Mpc.supports_multiplication".to_string());
+        known_builtins.insert("Mpc.supports_dkg".to_string());
+        known_builtins.insert("Mpc.supports_client_input".to_string());
+        known_builtins.insert("Mpc.protocol_name".to_string());
 
         // Rbc builtin object methods (Reliable Broadcast)
         known_builtins.insert("Rbc.broadcast".to_string());
@@ -1028,7 +1039,37 @@ pub fn generate_bytecode(node: &AstNode) -> CompilerResult<CompiledProgram> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dedupe_constants, Constant};
+    use super::*;
+    use crate::bytecode::Instruction;
+
+    // Helper: compiles source through the full pipeline and returns the CompiledProgram.
+    fn compile_source(source: &str) -> CompiledProgram {
+        let tokens = crate::lexer::tokenize(source, "test.stfl").expect("tokenize failed");
+        let ast = crate::parser::parse(&tokens, "test.stfl").expect("parse failed");
+        let ast = crate::ufcs::transform_ufcs(ast);
+        let mut reporter = crate::errors::ErrorReporter::new();
+        let analyzed = crate::semantic::analyze(ast, &mut reporter, "test.stfl", source)
+            .expect("semantic analysis failed");
+        generate_bytecode(&analyzed).expect("codegen failed")
+    }
+
+    // Helper: try to compile and return Err on any stage failure.
+    fn try_compile_source(source: &str) -> Result<CompiledProgram, String> {
+        let tokens = crate::lexer::tokenize(source, "test.stfl").map_err(|e| e.message.clone())?;
+        let ast = crate::parser::parse(&tokens, "test.stfl").map_err(|e| e.message.clone())?;
+        let ast = crate::ufcs::transform_ufcs(ast);
+        let mut reporter = crate::errors::ErrorReporter::new();
+        let analyzed = crate::semantic::analyze(ast, &mut reporter, "test.stfl", source)
+            .map_err(|_| {
+                reporter.get_all().iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?;
+        generate_bytecode(&analyzed).map_err(|e| e.message.clone())
+    }
+
+    // ===================== dedupe_constants =====================
 
     #[test]
     fn dedupe_removes_duplicates_and_preserves_order() {
@@ -1052,5 +1093,264 @@ mod tests {
         assert!(matches!(out[2], Constant::String(ref s) if s == "a"));
         assert!(matches!(out[3], Constant::Unit));
         assert!(matches!(out[4], Constant::I64(2)));
+    }
+
+    #[test]
+    fn dedupe_empty_input() {
+        let out = dedupe_constants(vec![]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn dedupe_all_unique() {
+        let input = vec![
+            Constant::I64(1),
+            Constant::I64(2),
+            Constant::I64(3),
+        ];
+        let out = dedupe_constants(input);
+        assert_eq!(out.len(), 3);
+    }
+
+    // ===================== Codegen — Happy Path =====================
+
+    #[test]
+    fn codegen_integer_literal() {
+        let program = compile_source("var x = 42");
+        assert!(!program.main_chunk.instructions.is_empty());
+        let has_ldi_42 = program.main_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::LDI(_, ref v) if *v == crate::core_types::Value::I64(42))
+        });
+        assert!(has_ldi_42, "Expected LDI with value 42 in main chunk");
+    }
+
+    #[test]
+    fn codegen_variable_declaration_with_value() {
+        let program = compile_source("var x = 10");
+        assert!(!program.main_chunk.instructions.is_empty());
+        let has_ldi_10 = program.main_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::LDI(_, ref v) if *v == crate::core_types::Value::I64(10))
+        });
+        assert!(has_ldi_10, "Expected LDI with value 10");
+    }
+
+    #[test]
+    fn codegen_binary_add() {
+        let source = r#"
+def add(a: int64, b: int64) -> int64:
+  return a + b
+
+var result = add(1, 2)
+"#;
+        let program = compile_source(source);
+        let add_chunk = &program.function_chunks["add"];
+        let has_add = add_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::ADD(_, _, _))
+        });
+        assert!(has_add, "Expected ADD instruction for a + b");
+    }
+
+    #[test]
+    fn codegen_binary_sub() {
+        let source = r#"
+def sub(a: int64, b: int64) -> int64:
+  return a - b
+
+var result = sub(5, 3)
+"#;
+        let program = compile_source(source);
+        let sub_chunk = &program.function_chunks["sub"];
+        let has_sub = sub_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::SUB(_, _, _))
+        });
+        assert!(has_sub, "Expected SUB instruction for a - b");
+    }
+
+    #[test]
+    fn codegen_binary_mul() {
+        let source = r#"
+def mul(a: int64, b: int64) -> int64:
+  return a * b
+
+var result = mul(3, 4)
+"#;
+        let program = compile_source(source);
+        let mul_chunk = &program.function_chunks["mul"];
+        let has_mul = mul_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::MUL(_, _, _))
+        });
+        assert!(has_mul, "Expected MUL instruction for a * b");
+    }
+
+    #[test]
+    fn codegen_function_definition_and_call() {
+        let source = r#"
+def add(a: int64, b: int64) -> int64:
+  return a + b
+
+var sum = add(1, 2)
+"#;
+        let program = compile_source(source);
+        assert!(program.function_chunks.contains_key("add"),
+            "Expected 'add' in function_chunks, got keys: {:?}", program.function_chunks.keys().collect::<Vec<_>>());
+        let add_chunk = &program.function_chunks["add"];
+        let has_add = add_chunk.instructions.iter().any(|i| matches!(i, Instruction::ADD(_, _, _)));
+        assert!(has_add, "Expected ADD instruction in add function");
+    }
+
+    #[test]
+    fn codegen_if_else_expression() {
+        let source = r#"
+def choose(x: int64) -> int64:
+  if x == 0:
+    return 1
+  else:
+    return 2
+
+var r = choose(0)
+"#;
+        let program = compile_source(source);
+        let choose_chunk = &program.function_chunks["choose"];
+        let has_cmp = choose_chunk.instructions.iter().any(|i| matches!(i, Instruction::CMP(_, _)));
+        assert!(has_cmp, "Expected CMP instruction in choose function");
+    }
+
+    #[test]
+    fn codegen_print_call() {
+        let source = r#"print("hello")"#;
+        let program = compile_source(source);
+        let has_call_print = program.main_chunk.instructions.iter().any(|i| {
+            matches!(i, Instruction::CALL(ref name) if name == "print")
+        });
+        assert!(has_call_print, "Expected CALL print in main chunk");
+    }
+
+    // ===================== Codegen — Semi-honest =====================
+
+    #[test]
+    fn codegen_function_with_multiple_parameters() {
+        let source = r#"
+def triple_add(a: int64, b: int64, c: int64) -> int64:
+  return a + b + c
+
+var result = triple_add(1, 2, 3)
+"#;
+        let program = compile_source(source);
+        assert!(program.function_chunks.contains_key("triple_add"));
+        let add_count = program.function_chunks["triple_add"].instructions.iter()
+            .filter(|i| matches!(i, Instruction::ADD(_, _, _)))
+            .count();
+        assert!(add_count >= 2, "Expected at least 2 ADD instructions, got {}", add_count);
+    }
+
+    #[test]
+    fn codegen_while_loop() {
+        let source = r#"
+def countdown(n: int64) -> int64:
+  var i = n
+  while i > 0:
+    i = i - 1
+  return i
+
+var result = countdown(5)
+"#;
+        let program = compile_source(source);
+        let func_chunk = &program.function_chunks["countdown"];
+        let has_jmp = func_chunk.instructions.iter().any(|i| matches!(i, Instruction::JMP(_)));
+        assert!(has_jmp, "Expected JMP for while loop");
+    }
+
+    #[test]
+    fn codegen_nested_function_calls() {
+        let source = r#"
+def double(x: int64) -> int64:
+  return x + x
+
+def quad(x: int64) -> int64:
+  return double(double(x))
+
+var result = quad(3)
+"#;
+        let program = compile_source(source);
+        assert!(program.function_chunks.contains_key("double"));
+        assert!(program.function_chunks.contains_key("quad"));
+        let call_count = program.function_chunks["quad"].instructions.iter()
+            .filter(|i| matches!(i, Instruction::CALL(ref name) if name == "double"))
+            .count();
+        assert_eq!(call_count, 2, "Expected 2 calls to double in quad, got {}", call_count);
+    }
+
+    #[test]
+    fn codegen_comparison_operators() {
+        let source = r#"
+def check(a: int64, b: int64) -> bool:
+  return a < b
+
+var r = check(1, 2)
+"#;
+        let program = compile_source(source);
+        let func_chunk = &program.function_chunks["check"];
+        let has_cmp = func_chunk.instructions.iter().any(|i| matches!(i, Instruction::CMP(_, _)));
+        assert!(has_cmp, "Expected CMP instruction for a < b");
+    }
+
+    // ===================== Codegen — Adversarial =====================
+
+    #[test]
+    fn codegen_minimal_function_body() {
+        // Function with a single discard statement — verifies codegen handles
+        // functions with no meaningful return value.
+        let source = r#"
+def noop():
+  discard 0
+
+noop()
+"#;
+        let program = compile_source(source);
+        assert!(program.function_chunks.contains_key("noop"));
+        let chunk = &program.function_chunks["noop"];
+        // Should have at least one instruction (LDI for the constant 0)
+        assert!(!chunk.instructions.is_empty(), "Expected non-empty instructions for noop()");
+    }
+
+    #[test]
+    fn codegen_duplicate_function_name_errors() {
+        let source = r#"
+def foo() -> int64:
+  return 1
+
+def foo() -> int64:
+  return 2
+
+var r = foo()
+"#;
+        let result = try_compile_source(source);
+        assert!(result.is_err(), "Expected error for duplicate function name");
+        // Duplicate function names are caught at semantic analysis, so the error string
+        // comes from the try_compile_source error mapping.
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.to_lowercase().contains("already") || err_msg.to_lowercase().contains("duplicate")
+                || err_msg.to_lowercase().contains("semantic"),
+            "Expected duplicate/semantic error, got: {}", err_msg
+        );
+    }
+
+    #[test]
+    fn codegen_multiple_returns_in_function() {
+        let source = r#"
+def abs_val(x: int64) -> int64:
+  if x < 0:
+    return 0 - x
+  return x
+
+var r = abs_val(0 - 5)
+"#;
+        let program = compile_source(source);
+        let func = &program.function_chunks["abs_val"];
+        let ret_count = func.instructions.iter()
+            .filter(|i| matches!(i, Instruction::RET(_)))
+            .count();
+        assert!(ret_count >= 2, "Expected at least 2 RET instructions, got {}", ret_count);
     }
 }

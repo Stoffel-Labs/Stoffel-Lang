@@ -11,17 +11,20 @@ pub struct SemanticAnalyzer<'a> {
     error_reporter: &'a mut ErrorReporter,
     current_function_return_type: Option<SymbolType>, // Track expected return type
     filename: &'a str,
+    /// The original source text, used for generating source snippets in error messages
+    source: &'a str,
     /// Imported symbols from other modules, keyed by their qualified name
     imported_symbols: HashMap<String, SymbolInfo>,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
-    pub fn new(error_reporter: &'a mut ErrorReporter, filename: &'a str) -> Self {
+    pub fn new(error_reporter: &'a mut ErrorReporter, filename: &'a str, source: &'a str) -> Self {
         SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
             error_reporter,
             current_function_return_type: None,
             filename,
+            source,
             imported_symbols: HashMap::new(),
         }
     }
@@ -30,6 +33,7 @@ impl<'a> SemanticAnalyzer<'a> {
     pub fn with_imports(
         error_reporter: &'a mut ErrorReporter,
         filename: &'a str,
+        source: &'a str,
         imported_symbols: HashMap<String, SymbolInfo>,
     ) -> Self {
         SemanticAnalyzer {
@@ -37,8 +41,15 @@ impl<'a> SemanticAnalyzer<'a> {
             error_reporter,
             current_function_return_type: None,
             filename,
+            source,
             imported_symbols,
         }
+    }
+
+    /// Wraps an error with a source code snippet if location is available.
+    fn error_with_snippet(&self, error: CompilerError, location: &SourceLocation) -> CompilerError {
+        let snippet = crate::errors::extract_source_snippet(self.source, location, 1);
+        if snippet.is_empty() { error } else { error.with_snippet(snippet) }
     }
 
     /// Adds imported symbols to the global scope.
@@ -106,10 +117,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 if !dst_type.fits_literal_i128(val) {
                     let min = dst_type.min_value_i128().unwrap();
                     let max = dst_type.max_value_i128().unwrap();
-                    self.error_reporter.add_error(CompilerError::type_error(
+                    let error = CompilerError::narrowing_error(
                         format!("Integer literal {} does not fit in '{}' (allowed range {}..={})", val, declared_type_to_string(dst_type), min, max),
-                        location,
-                    ));
+                        location.clone(),
+                    ).with_hint("Use a wider type like 'int64' or reduce the value");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     return Err(());
                 }
                 return Ok(());
@@ -122,19 +134,21 @@ impl<'a> SemanticAnalyzer<'a> {
                 if src_type.can_widen_to(dst_type) {
                     return Ok(());
                 }
-                self.error_reporter.add_error(CompilerError::type_error(
+                let error = CompilerError::narrowing_error(
                     format!("Cannot implicitly convert from '{}' to '{}'", declared_type_to_string(src_type), declared_type_to_string(dst_type)),
-                    location,
-                ));
+                    location.clone(),
+                ).with_hint("Use an explicit cast or change the target type");
+                self.error_reporter.add_error(self.error_with_snippet(error, &location));
                 return Err(());
             }
         }
         // Fallback: check type compatibility (handles Unknown in collections)
         if !Self::types_compatible(src_type, dst_type) {
-            self.error_reporter.add_error(CompilerError::type_error(
+            let error = CompilerError::type_mismatch(
                 format!("Type mismatch. Expected '{}', found '{}'", declared_type_to_string(dst_type), declared_type_to_string(src_type)),
-                location,
-            ));
+                location.clone(),
+            ).with_hint("Ensure the expression produces the expected type");
+            self.error_reporter.add_error(self.error_with_snippet(error, &location));
             return Err(());
         }
         Ok(())
@@ -152,12 +166,11 @@ impl<'a> SemanticAnalyzer<'a> {
              for (error, location) in &self.symbol_table.errors {
                  match error {
                      SymbolDeclarationError::AlreadyDeclared { name, original_location } => {
-                         self.error_reporter.add_error(
-                             CompilerError::semantic_error(
-                                 format!("Symbol '{}' already declared in this scope", name),
-                                 location.clone(), // Location of the second declaration attempt
-                             ).with_hint(format!("Original declaration was here: {}", original_location))
-                         );
+                         let error = CompilerError::duplicate_symbol(
+                             format!("Symbol '{}' already declared in this scope", name),
+                             location.clone(),
+                         ).with_hint(format!("Original declaration was here: {}", original_location));
+                         self.error_reporter.add_error(self.error_with_snippet(error, location));
                      }
                      // Handle other symbol table errors if added later
                  }
@@ -218,20 +231,22 @@ impl<'a> SemanticAnalyzer<'a> {
                 // no function used as entry (pragmas include 'entry') is secret.
                 let is_entry = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
                 if is_entry && *is_secret {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
+                    let error = CompilerError::secret_violation(
                         "Entry function cannot be declared 'secret'",
                         location.clone(),
-                    ));
+                    ).with_hint("Remove 'secret'. Entry functions run in the clear");
+                    self.error_reporter.add_error(self.error_with_snippet(error, location));
                     return Err(());
                 }
 
                 // Disallow 'secret' main explicitly at semantic level (parser doesn't allow 'secret main' keyword).
                 if let Some(n) = name {
                     if n == "main" && *is_secret {
-                        self.error_reporter.add_error(CompilerError::semantic_error(
+                        let error = CompilerError::secret_violation(
                             "The 'main' entry function cannot be secret",
                             location.clone(),
-                        ));
+                        ).with_hint("Remove 'secret' from the 'main' function");
+                        self.error_reporter.add_error(self.error_with_snippet(error, location));
                         return Err(());
                     }
                 }
@@ -450,22 +465,21 @@ impl<'a> SemanticAnalyzer<'a> {
                     // The parser transforms obj.method(args) into method(obj, args) via UFCS,
                     // so we catch method-like identifiers here
                     if let Some(suggestion) = suggest_method_to_function(&name, &self.symbol_table) {
-                        self.error_reporter.add_error(
-                            CompilerError::semantic_error(
-                                format!("'{}' is not a valid function name", name),
-                                location.clone(),
-                            ).with_hint(format!("Stoffel-Lang uses functions instead of methods. Use {} instead", suggestion))
-                        );
+                        let error = CompilerError::undefined_symbol(
+                            format!("'{}' is not a valid function name", name),
+                            location.clone(),
+                        ).with_hint(format!("Stoffel-Lang uses functions instead of methods. Use {} instead", suggestion));
+                        self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     } else {
                         // Semantic-aware suggestion using actual symbols in scope
-                        let mut error = CompilerError::semantic_error(
+                        let mut error = CompilerError::undefined_symbol(
                             format!("Use of undeclared identifier '{}'", name),
                             location.clone(),
                         );
                         if let Some(suggestion) = suggest_from_symbols(&name, &self.symbol_table) {
                             error = error.with_hint(format!("Did you mean '{}'?", suggestion));
                         }
-                        self.error_reporter.add_error(error);
+                        self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     }
                     Err(())
                 }
@@ -490,12 +504,11 @@ impl<'a> SemanticAnalyzer<'a> {
 
                 // Special check: take_share can only be assigned to secret variables
                 if is_take_share_call && !target_type.is_secret() {
-                    self.error_reporter.add_error(
-                        CompilerError::semantic_error(
-                            "ClientStore.take_share can only be assigned to secret variables",
-                            location.clone(),
-                        ).with_hint("The target variable must be declared with 'secret' keyword or secret type")
-                    );
+                    let error = CompilerError::secret_violation(
+                        "ClientStore.take_share can only be assigned to secret variables",
+                        location.clone(),
+                    ).with_hint("The target variable must be declared with 'secret' keyword or secret type");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     return Err(());
                 }
 
@@ -545,12 +558,11 @@ impl<'a> SemanticAnalyzer<'a> {
 
                 // Special check: take_share can only populate secret variables
                 if is_take_share_call && !is_secret && !type_annotation.as_ref().map_or(false, |t| SymbolType::from_ast(t).is_secret()) {
-                    self.error_reporter.add_error(
-                        CompilerError::semantic_error(
-                            "ClientStore.take_share can only be assigned to secret variables",
-                            location.clone(),
-                        ).with_hint("Add 'secret' keyword to the variable declaration or use 'secret' type annotation")
-                    );
+                    let error = CompilerError::secret_violation(
+                        "ClientStore.take_share can only be assigned to secret variables",
+                        location.clone(),
+                    ).with_hint("Add 'secret' keyword to the variable declaration or use 'secret' type annotation");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     return Err(());
                 }
 
@@ -737,18 +749,22 @@ impl<'a> SemanticAnalyzer<'a> {
                 // Analyze condition and enforce that branching on secret is not supported
                 let (checked_condition, cond_type) = self.analyze_node(*condition)?;
                 if cond_type.is_secret() {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
+                    let loc = checked_condition.location();
+                    let error = CompilerError::secret_violation(
                         "Branching with secret values isn't supported yet (secret condition in 'if')",
-                        checked_condition.location(),
-                    ));
+                        loc.clone(),
+                    ).with_hint("Reveal the value first with Share.open(), then branch on the result");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                     return Err(());
                 }
                 // Optional: ensure condition is bool (underlying type)
                 if cond_type.underlying_type() != &SymbolType::Bool {
-                    self.error_reporter.add_error(CompilerError::type_error(
+                    let loc = checked_condition.location();
+                    let error = CompilerError::type_mismatch(
                         "If-condition must be of type 'bool'",
-                        checked_condition.location(),
-                    ));
+                        loc.clone(),
+                    ).with_hint("Use a comparison like 'x > 0' or 'x == true'");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                     return Err(());
                 }
 
@@ -769,17 +785,21 @@ impl<'a> SemanticAnalyzer<'a> {
                 // Analyze condition and error if it's secret
                 let (checked_condition, cond_type) = self.analyze_node(*condition)?;
                 if cond_type.is_secret() {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
+                    let loc = checked_condition.location();
+                    let error = CompilerError::secret_violation(
                         "Branching with secret values isn't supported yet (secret condition in 'while')",
-                        checked_condition.location(),
-                    ));
+                        loc.clone(),
+                    ).with_hint("Reveal the value first with Share.open(), then use it in the condition");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                     return Err(());
                 }
                 if cond_type.underlying_type() != &SymbolType::Bool {
-                    self.error_reporter.add_error(CompilerError::type_error(
+                    let loc = checked_condition.location();
+                    let error = CompilerError::type_mismatch(
                         "While-condition must be of type 'bool'",
-                        checked_condition.location(),
-                    ));
+                        loc.clone(),
+                    ).with_hint("Use a comparison like 'x > 0'");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                     return Err(());
                 }
                 let (checked_body, _body_ty) = self.analyze_node(*body)?;
@@ -813,10 +833,11 @@ impl<'a> SemanticAnalyzer<'a> {
             AstNode::ForLoop { variables, iterable, body, location } => {
                 // Support single variable iteration over ranges or collections
                 if variables.len() != 1 {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
+                    let error = CompilerError::semantic_error(
                         "For-loop with multiple variables not supported yet",
                         location.clone(),
-                    ));
+                    ).with_hint("Use a single loop variable and access fields inside the loop");
+                    self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     return Err(());
                 }
 
@@ -844,13 +865,15 @@ impl<'a> SemanticAnalyzer<'a> {
                                 (SymbolType::String, false)
                             }
                             _ => {
-                                self.error_reporter.add_error(CompilerError::semantic_error(
+                                let loc = checked_iterable.location();
+                                let error = CompilerError::type_mismatch(
                                     format!(
                                         "Cannot iterate over type '{}'; expected a range (a..b) or a List",
                                         declared_type_to_string(&iter_type)
                                     ),
-                                    checked_iterable.location(),
-                                ));
+                                    loc.clone(),
+                                ).with_hint("Use a range like '0..n' or a List value");
+                                self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                                 return Err(());
                             }
                         }
@@ -903,10 +926,12 @@ impl<'a> SemanticAnalyzer<'a> {
                          // TODO: Check secrecy compatibility (cannot return clear from secret context, etc.)
                      }
                      None => {
-                         self.error_reporter.add_error(CompilerError::semantic_error(
+                         let loc = node.location();
+                         let error = CompilerError::semantic_error(
                              "'return' statement outside of function",
-                             node.location(),
-                         ));
+                             loc.clone(),
+                         ).with_hint("'return' can only appear inside a 'def' block");
+                         self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                          return Err(());
                      }
                  }
@@ -937,10 +962,11 @@ impl<'a> SemanticAnalyzer<'a> {
                             if let Some(method_info) = self.symbol_table.lookup_builtin_method(obj_name, method_name) {
                                 (name.clone(), method_info.parameters.clone(), method_info.return_type.clone())
                             } else {
-                                self.error_reporter.add_error(CompilerError::semantic_error(
+                                let error = CompilerError::undefined_symbol(
                                     format!("Unknown method '{}' on builtin object '{}'", method_name, obj_name),
                                     loc.clone(),
-                                ));
+                                ).with_hint("Check available methods for this object");
+                                self.error_reporter.add_error(self.error_with_snippet(error, loc));
                                 return Err(());
                             }
                         } else if let Some(info) = self.symbol_table.lookup_symbol(name) {
@@ -950,23 +976,24 @@ impl<'a> SemanticAnalyzer<'a> {
                                     (name.clone(), parameters.clone(), return_type.clone())
                                 }
                                 _ => {
-                                    self.error_reporter.add_error(CompilerError::type_error(
+                                    let error = CompilerError::type_mismatch(
                                         format!("'{}' is not a function", name),
                                         loc.clone(),
-                                    ));
+                                    ).with_hint("This identifier refers to a variable, not a callable function");
+                                    self.error_reporter.add_error(self.error_with_snippet(error, loc));
                                     return Err(());
                                 }
                             }
                         } else {
                             // Semantic-aware suggestion using actual functions in scope
-                            let mut error = CompilerError::semantic_error(
+                            let mut error = CompilerError::undefined_symbol(
                                 format!("Use of undeclared function '{}'", name),
                                 loc.clone(),
                             );
                             if let Some(suggestion) = suggest_function_from_symbols(&name, &self.symbol_table) {
                                 error = error.with_hint(format!("Did you mean '{}'?", suggestion));
                             }
-                            self.error_reporter.add_error(error);
+                            self.error_reporter.add_error(self.error_with_snippet(error, loc));
                             return Err(());
                         }
                     }
@@ -1024,21 +1051,27 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                     // Other non-callable expressions
                     _ => {
-                        self.error_reporter.add_error(CompilerError::type_error(
+                        let loc = checked_function_node.location();
+                        let error = CompilerError::type_mismatch(
                             "Expression is not callable",
-                            checked_function_node.location(),
-                        ));
+                            loc.clone(),
+                        ).with_hint("Only functions can be called with '()'");
+                        self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                         return Err(());
                     }
                 };
 
                 // 4. Validate argument count
                 if expected_param_types.len() != argument_types.len() {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
+                    let param_strs: Vec<String> = expected_param_types.iter().map(|t| declared_type_to_string(t)).collect();
+                    let ret_str = declared_type_to_string(&return_type);
+                    let sig_hint = format!("Signature: {}({}) -> {}", function_name, param_strs.join(", "), ret_str);
+                    let error = CompilerError::semantic_error(
                         format!("Function '{}' expects {} arguments, but {} were provided",
                             function_name, expected_param_types.len(), argument_types.len()),
                         location.clone(),
-                    ));
+                    ).with_hint(sig_hint);
+                    self.error_reporter.add_error(self.error_with_snippet(error, &location));
                     return Err(());
                 }
 
@@ -1081,22 +1114,24 @@ impl<'a> SemanticAnalyzer<'a> {
                         if let Some(info) = self.symbol_table.lookup_symbol(name) {
                             (name.clone(), info.clone())
                         } else {
-                            let mut error = CompilerError::semantic_error(
+                            let mut error = CompilerError::undefined_symbol(
                                 format!("Use of undeclared function '{}' in command call", name),
                                 loc.clone(),
                             );
                             if let Some(suggestion) = suggest_function_from_symbols(&name, &self.symbol_table) {
                                 error = error.with_hint(format!("Did you mean '{}'?", suggestion));
                             }
-                            self.error_reporter.add_error(error);
+                            self.error_reporter.add_error(self.error_with_snippet(error, loc));
                             return Err(());
                         }
                     }
                     _ => {
-                        self.error_reporter.add_error(CompilerError::type_error(
+                        let loc = checked_command_node.location();
+                        let error = CompilerError::type_mismatch(
                             "Command expression is not callable",
-                            checked_command_node.location(),
-                        ));
+                            loc.clone(),
+                        ).with_hint("Only functions can be used in command-call syntax");
+                        self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                         return Err(());
                     }
                 };
@@ -1108,10 +1143,12 @@ impl<'a> SemanticAnalyzer<'a> {
                         (parameters.clone(), return_type.clone())
                     }
                     _ => {
-                        self.error_reporter.add_error(CompilerError::type_error(
+                        let loc = checked_command_node.location();
+                        let error = CompilerError::type_mismatch(
                             format!("'{}' is not a function (used in command call)", function_name),
-                            checked_command_node.location(),
-                        ));
+                            loc.clone(),
+                        ).with_hint("This identifier refers to a variable, not a callable function");
+                        self.error_reporter.add_error(self.error_with_snippet(error, &loc));
                         return Err(());
                     }
                 };
@@ -1158,13 +1195,14 @@ impl<'a> SemanticAnalyzer<'a> {
                             (l, _) if !is_left_numeric => l.location(),
                             (_, r) => r.location(),
                         };
-                        self.error_reporter.add_error(CompilerError::type_error(
+                        let error = CompilerError::non_numeric_operands(
                             format!("Operands to '{}' must be numeric (ints or float), found '{}' and '{}'",
                                     op,
                                     declared_type_to_string(&left_ty),
                                     declared_type_to_string(&right_ty)),
-                            err_loc,
-                        ).with_hint("Cast or adjust operand types to be comparable"));
+                            err_loc.clone(),
+                        ).with_hint("Cast or adjust operand types to be comparable");
+                        self.error_reporter.add_error(self.error_with_snippet(error, &err_loc));
                         return Err(());
                     }
 
@@ -1439,8 +1477,9 @@ pub fn analyze(
     ast: AstNode,
     error_reporter: &mut ErrorReporter,
     filename: &str,
+    source: &str,
 ) -> Result<AstNode, ()> {
-    let mut analyzer = SemanticAnalyzer::new(error_reporter, filename);
+    let mut analyzer = SemanticAnalyzer::new(error_reporter, filename, source);
     analyzer.analyze(ast)
 }
 
@@ -1449,8 +1488,499 @@ pub fn analyze_with_imports(
     ast: AstNode,
     error_reporter: &mut ErrorReporter,
     filename: &str,
+    source: &str,
     imported_symbols: HashMap<String, SymbolInfo>,
 ) -> Result<AstNode, ()> {
-    let mut analyzer = SemanticAnalyzer::with_imports(error_reporter, filename, imported_symbols);
+    let mut analyzer = SemanticAnalyzer::with_imports(error_reporter, filename, source, imported_symbols);
     analyzer.analyze(ast)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::AstNode;
+    use crate::errors::ErrorReporter;
+    use crate::lexer;
+    use crate::parser;
+    use crate::ufcs;
+
+    /// Helper: runs the full pipeline (lex -> parse -> UFCS -> semantic analyze).
+    fn analyze_source(src: &str) -> Result<AstNode, Vec<String>> {
+        let tokens = lexer::tokenize(src, "test.stfl")
+            .map_err(|e| vec![e.to_string()])?;
+        let ast = parser::parse(&tokens, "test.stfl")
+            .map_err(|e| vec![e.to_string()])?;
+        let transformed = ufcs::transform_ufcs(ast);
+        let mut reporter = ErrorReporter::new();
+        match super::analyze(transformed, &mut reporter, "test.stfl", src) {
+            Ok(node) => Ok(node),
+            Err(()) => {
+                let msgs: Vec<String> = reporter.get_all().iter().map(|e| e.message.clone()).collect();
+                Err(msgs)
+            }
+        }
+    }
+
+    fn assert_ok(src: &str) {
+        match analyze_source(src) {
+            Ok(_) => {},
+            Err(errs) => panic!("Expected successful analysis, got errors: {:?}", errs),
+        }
+    }
+
+    fn assert_err(src: &str) {
+        assert!(analyze_source(src).is_err(), "Expected analysis to fail for: {}", src);
+    }
+
+    /// Assert that analysis fails AND the error messages contain at least one of the given keywords.
+    fn assert_err_contains(src: &str, keywords: &[&str]) {
+        let result = analyze_source(src);
+        assert!(result.is_err(), "Expected analysis to fail for: {}", src);
+        let errs = result.unwrap_err();
+        let all_msgs = errs.join(" ");
+        assert!(
+            keywords.iter().any(|kw| all_msgs.to_lowercase().contains(&kw.to_lowercase())),
+            "Expected error containing one of {:?}, got: {:?}", keywords, errs
+        );
+    }
+
+    /// Strip common leading whitespace (like Python textwrap.dedent).
+    fn dedent(s: &str) -> String {
+        let s = s.strip_prefix('\n').unwrap_or(s);
+        let s = s.strip_suffix('\n').unwrap_or(s);
+        let min_indent = s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        s.lines()
+            .map(|l| if l.len() >= min_indent { &l[min_indent..] } else { l.trim() })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    // =========================================================
+    // HAPPY PATH
+    // =========================================================
+
+    #[test]
+    fn variable_declaration_with_type_annotation() {
+        assert_ok("var x: int64 = 42");
+    }
+
+    #[test]
+    fn variable_declaration_with_type_inference() {
+        assert_ok("var x = 10");
+    }
+
+    #[test]
+    fn variable_reassignment() {
+        assert_ok("var x: int64 = 1\nx = 2");
+    }
+
+    #[test]
+    fn function_definition_and_call() {
+        let src = dedent("
+            def add(a: int64, b: int64) -> int64:
+              return a
+            add(1, 2)
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn function_no_return_type_defaults_void() {
+        let src = dedent("
+            def greet(name: string):
+              print(name)
+            greet(\"hello\")
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn secret_variable_declaration() {
+        assert_ok("secret var s: int64 = 0");
+    }
+
+    #[test]
+    fn nested_scope_accesses_outer_variable() {
+        let src = dedent("
+            var x: int64 = 10
+            def foo() -> int64:
+              return x
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn if_expression_with_bool_condition() {
+        let src = dedent("
+            var x: int64 = 5
+            var y: int64 = 10
+            if x < y:
+              print(\"yes\")
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn if_with_else_branch() {
+        let src = dedent("
+            var x: int64 = 5
+            var y: int64 = 10
+            if x < y:
+              print(\"a\")
+            else:
+              print(\"b\")
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn for_loop_over_range() {
+        let src = dedent("
+            for i in 0..10:
+              print(\"loop\")
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn while_loop_with_bool_condition() {
+        let src = dedent("
+            var x: int64 = 0
+            var limit: int64 = 10
+            while x < limit:
+              x = x
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn binary_comparison_produces_bool() {
+        let src = dedent("
+            var a: int64 = 1
+            var b: int64 = 2
+            if a == b:
+              print(\"equal\")
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn list_literal_analysis() {
+        assert_ok("var arr = [1, 2, 3]");
+    }
+
+    #[test]
+    fn dict_literal_analysis() {
+        assert_ok("var d = {\"a\": 1, \"b\": 2}");
+    }
+
+    #[test]
+    fn builtin_print_call() {
+        assert_ok("print(\"hello\")");
+    }
+
+    #[test]
+    fn builtin_share_open_call() {
+        let src = dedent("
+            var s = Share.from_clear(42)
+            var result = Share.open(s)
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn object_definition_registers_type() {
+        let src = dedent("
+            object Point:
+              x: int64
+              y: int64
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn object_field_types_validated() {
+        // Object fields with valid types should pass
+        let src = dedent("
+            object Config:
+              width: int64
+              label: string
+              enabled: bool
+        ");
+        assert_ok(&src);
+    }
+
+    // =========================================================
+    // SEMI-HONEST (edge cases, boundary conditions)
+    // =========================================================
+
+    #[test]
+    fn variable_shadowing_in_nested_scope() {
+        let src = dedent("
+            var x: int64 = 10
+            def foo(x: int64) -> int64:
+              return x
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn empty_block_analysis() {
+        assert_ok("var x: int64 = 0");
+    }
+
+    #[test]
+    fn secret_type_in_annotation() {
+        assert_ok("var s: secret int64 = 0");
+    }
+
+    #[test]
+    fn type_compatible_with_unknown() {
+        assert_ok("var arr = create_array()");
+    }
+
+    #[test]
+    fn integer_widening_int8_to_int64() {
+        let src = dedent("
+            def consume(x: int64) -> int64:
+              return x
+            var small: int8 = 1
+            consume(small)
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn integer_literal_fits_in_int8() {
+        assert_ok("var x: int8 = 127");
+    }
+
+    #[test]
+    fn secret_comparison_in_if_condition_rejected() {
+        // Branching on secret values isn't supported — the condition involves secret `a`,
+        // producing a secret bool that can't be used for control flow.
+        let src = dedent("
+            secret var a: int64 = 1
+            var b: int64 = 2
+            if a < b:
+              print(\"bad\")
+        ");
+        assert_err_contains(&src, &["secret", "bool"]);
+    }
+
+    #[test]
+    fn multiple_functions_in_same_scope() {
+        let src = dedent("
+            def foo(x: int64) -> int64:
+              return x
+            def bar(y: int64) -> int64:
+              return y
+            foo(1)
+            bar(2)
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn for_loop_variable_scoped_to_loop() {
+        let src = dedent("
+            for i in 0..5:
+              print(\"a\")
+            var i: int64 = 99
+        ");
+        assert_ok(&src);
+    }
+
+    #[test]
+    fn discard_statement() {
+        let src = dedent("
+            def foo() -> int64:
+              return 42
+            discard foo()
+        ");
+        assert_ok(&src);
+    }
+
+    // =========================================================
+    // ADVERSARIAL (trying to break semantic analysis)
+    // =========================================================
+
+    #[test]
+    fn use_of_undefined_variable() {
+        assert_err_contains("var x: int64 = undefined_var", &["undefined", "not defined", "not found"]);
+    }
+
+    #[test]
+    fn type_mismatch_in_variable_declaration() {
+        assert_err_contains("var x: int64 = \"hello\"", &["type mismatch", "incompatible", "expected"]);
+    }
+
+    #[test]
+    fn calling_a_non_function() {
+        let src = dedent("
+            var x: int64 = 5
+            x(1, 2)
+        ");
+        assert_err_contains(&src, &["not a function", "not callable", "cannot call"]);
+    }
+
+    #[test]
+    fn wrong_argument_count_to_function() {
+        let src = dedent("
+            def add(a: int64, b: int64) -> int64:
+              return a
+            add(1)
+        ");
+        assert_err_contains(&src, &["argument", "expects", "parameter"]);
+    }
+
+    #[test]
+    fn wrong_argument_count_too_many() {
+        let src = dedent("
+            def noop():
+              print(\"hi\")
+            noop(1, 2, 3)
+        ");
+        assert_err_contains(&src, &["argument", "expects", "parameter"]);
+    }
+
+    #[test]
+    fn if_condition_not_bool() {
+        let src = dedent("
+            var x: int64 = 5
+            if x:
+              print(\"bad\")
+        ");
+        assert_err_contains(&src, &["bool", "condition"]);
+    }
+
+    #[test]
+    fn while_condition_not_bool() {
+        let src = dedent("
+            var x: int64 = 5
+            while x:
+              print(\"bad\")
+        ");
+        assert_err_contains(&src, &["bool", "condition"]);
+    }
+
+    #[test]
+    fn secret_condition_in_if_rejected() {
+        let src = dedent("
+            secret var flag: bool = true
+            if flag:
+              print(\"secret branch\")
+        ");
+        assert_err_contains(&src, &["secret", "condition"]);
+    }
+
+    #[test]
+    fn secret_condition_in_while_rejected() {
+        let src = dedent("
+            secret var flag: bool = true
+            while flag:
+              print(\"secret loop\")
+        ");
+        assert_err_contains(&src, &["secret", "condition"]);
+    }
+
+    #[test]
+    fn return_outside_function() {
+        assert_err_contains("return 42", &["return", "outside"]);
+    }
+
+    #[test]
+    fn return_type_mismatch() {
+        let src = dedent("
+            def foo() -> int64:
+              return \"wrong\"
+        ");
+        assert_err_contains(&src, &["type mismatch", "return", "incompatible"]);
+    }
+
+    #[test]
+    fn integer_literal_overflow_int8() {
+        assert_err_contains("var x: int8 = 200", &["does not fit", "range", "overflow"]);
+    }
+
+    #[test]
+    fn integer_narrowing_rejected() {
+        let src = dedent("
+            def consume(x: int8) -> int8:
+              return x
+            var big: int64 = 1
+            consume(big)
+        ");
+        assert_err_contains(&src, &["type mismatch", "narrowing", "incompatible", "expected", "convert"]);
+    }
+
+    #[test]
+    fn duplicate_variable_in_same_scope() {
+        let src = dedent("
+            var x: int64 = 1
+            var x: int64 = 2
+        ");
+        assert_err_contains(&src, &["already declared", "already defined", "duplicate", "redeclar"]);
+    }
+
+    #[test]
+    fn duplicate_function_in_same_scope() {
+        let src = dedent("
+            def foo():
+              print(\"a\")
+            def foo():
+              print(\"b\")
+        ");
+        assert_err_contains(&src, &["already declared", "already defined", "duplicate", "redeclar"]);
+    }
+
+    #[test]
+    fn secret_value_in_loop_condition_rejected() {
+        // Secret values cannot be used in control flow conditions
+        let src = dedent("
+            secret var limit: int64 = 10
+            var i: int64 = 0
+            while i < limit:
+              print(\"loop\")
+        ");
+        assert_err_contains(&src, &["secret", "condition", "bool"]);
+    }
+
+    #[test]
+    fn comparison_non_numeric_operands() {
+        let src = dedent("
+            var a = \"hello\"
+            var b = \"world\"
+            if a < b:
+              print(\"bad\")
+        ");
+        assert_err_contains(&src, &["numeric", "operand", "type", "comparison"]);
+    }
+
+    #[test]
+    fn undefined_type_in_annotation() {
+        assert_err_contains("var x: NonexistentType = 0", &["undefined", "unknown", "not defined", "not found"]);
+    }
+
+    #[test]
+    fn function_name_used_as_type() {
+        let src = dedent("
+            def foo():
+              print(\"hi\")
+            var x: foo = 0
+        ");
+        assert_err_contains(&src, &["not a type", "type", "invalid"]);
+    }
+
+    #[test]
+    fn for_loop_multiple_variables_rejected() {
+        let src = dedent("
+            for i, j in 0..10:
+              print(\"bad\")
+        ");
+        assert_err_contains(&src, &["multiple", "variable", "destructuring"]);
+    }
 }

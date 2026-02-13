@@ -184,6 +184,7 @@ impl MultiFileCompiler {
             imported_symbols,
             &mut error_reporter,
             &resolved.file_path.to_string_lossy(),
+            &resolved.source,
         )?;
 
         if error_reporter.has_errors() {
@@ -214,9 +215,10 @@ impl MultiFileCompiler {
         imported_symbols: &HashMap<String, SymbolInfo>,
         error_reporter: &mut ErrorReporter,
         filename: &str,
+        source: &str,
     ) -> Result<AstNode, Vec<CompilerError>> {
         // Use the semantic analyzer with imported symbols
-        semantic::analyze_with_imports(ast, error_reporter, filename, imported_symbols.clone())
+        semantic::analyze_with_imports(ast, error_reporter, filename, source, imported_symbols.clone())
             .map_err(|_| error_reporter.get_all().into_iter().cloned().collect())
     }
 

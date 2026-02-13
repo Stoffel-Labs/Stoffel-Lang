@@ -93,6 +93,129 @@ impl CompilerError {
         }
     }
 
+    // --- Syntax sub-codes ---
+
+    /// Creates a syntax error for an unexpected token (E002)
+    pub fn unexpected_token(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Syntax,
+            code: "E002".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a syntax error for a missing expected token (E003)
+    pub fn missing_token(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Syntax,
+            code: "E003".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a syntax error for indentation problems (E004)
+    pub fn indentation_error(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Syntax,
+            code: "E004".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    // --- Type sub-codes ---
+
+    /// Creates a type error for incompatible types (E102)
+    pub fn type_mismatch(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Type,
+            code: "E102".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a type error for implicit narrowing conversion (E103)
+    pub fn narrowing_error(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Type,
+            code: "E103".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a type error for arithmetic on non-numbers (E104)
+    pub fn non_numeric_operands(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Type,
+            code: "E104".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    // --- Semantic sub-codes ---
+
+    /// Creates a semantic error for undeclared variable/function (E202)
+    pub fn undefined_symbol(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Semantic,
+            code: "E202".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a semantic error for redeclaration in scope (E203)
+    pub fn duplicate_symbol(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Semantic,
+            code: "E203".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
+    /// Creates a semantic error for invalid secret usage (E204)
+    pub fn secret_violation(message: impl Into<String>, location: SourceLocation) -> Self {
+        CompilerError {
+            message: message.into(),
+            location,
+            severity: ErrorSeverity::Error,
+            category: ErrorCategory::Semantic,
+            code: "E204".to_string(),
+            hint: None,
+            source_snippet: None,
+        }
+    }
+
     /// Creates a new internal error
     pub fn internal_error(message: impl Into<String>) -> Self {
         CompilerError {
