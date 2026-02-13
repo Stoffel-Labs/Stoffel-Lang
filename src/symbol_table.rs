@@ -380,40 +380,41 @@ impl SymbolTable {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
         }
 
-        // Add ClientStore as a builtin object with methods
-        let mut client_store_methods = HashMap::new();
-        client_store_methods.insert("take_share".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64, SymbolType::Int64],
-            return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
-            qualified_name: "ClientStore.take_share".to_string(),
-        });
-        client_store_methods.insert("take_share_fixed".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64, SymbolType::Int64],
-            return_type: SymbolType::Secret(Box::new(SymbolType::Float)),
-            qualified_name: "ClientStore.take_share_fixed".to_string(),
-        });
-        client_store_methods.insert("get_number_clients".to_string(), ObjectMethodInfo {
-            parameters: vec![],
-            return_type: SymbolType::Int64,
-            qualified_name: "ClientStore.get_number_clients".to_string(),
-        });
+        // ClientStore builtin object (HoneyBadger only - requires client input)
+        #[cfg(feature = "honeybadger")]
+        {
+            let mut client_store_methods = HashMap::new();
+            client_store_methods.insert("take_share".to_string(), ObjectMethodInfo {
+                parameters: vec![SymbolType::Int64, SymbolType::Int64],
+                return_type: SymbolType::Secret(Box::new(SymbolType::Int64)),
+                qualified_name: "ClientStore.take_share".to_string(),
+            });
+            client_store_methods.insert("take_share_fixed".to_string(), ObjectMethodInfo {
+                parameters: vec![SymbolType::Int64, SymbolType::Int64],
+                return_type: SymbolType::Secret(Box::new(SymbolType::Float)),
+                qualified_name: "ClientStore.take_share_fixed".to_string(),
+            });
+            client_store_methods.insert("get_number_clients".to_string(), ObjectMethodInfo {
+                parameters: vec![],
+                return_type: SymbolType::Int64,
+                qualified_name: "ClientStore.get_number_clients".to_string(),
+            });
 
-        // Register the builtin object
-        self.builtin_objects.insert("ClientStore".to_string(), BuiltinObjectInfo {
-            name: "ClientStore".to_string(),
-            methods: client_store_methods,
-        });
+            self.builtin_objects.insert("ClientStore".to_string(), BuiltinObjectInfo {
+                name: "ClientStore".to_string(),
+                methods: client_store_methods,
+            });
 
-        // Add ClientStore as a global symbol (singleton instance)
-        let client_store_info = SymbolInfo {
-            name: "ClientStore".to_string(),
-            kind: SymbolKind::BuiltinObject { object_type_name: "ClientStore".to_string() },
-            symbol_type: SymbolType::Object("ClientStore".to_string()),
-            is_secret: false,
-            defined_at: SourceLocation::default(),
-        };
-        if let Err(e) = global_scope.declare(client_store_info) {
-            self.errors.push((e, SourceLocation::default()));
+            let client_store_info = SymbolInfo {
+                name: "ClientStore".to_string(),
+                kind: SymbolKind::BuiltinObject { object_type_name: "ClientStore".to_string() },
+                symbol_type: SymbolType::Object("ClientStore".to_string()),
+                is_secret: false,
+                defined_at: SourceLocation::default(),
+            };
+            if let Err(e) = global_scope.declare(client_store_info) {
+                self.errors.push((e, SourceLocation::default()));
+            }
         }
 
         // =====================================================================
@@ -483,28 +484,32 @@ impl SymbolTable {
             qualified_name: "Share.mul_scalar".to_string(),
         });
 
-        // Share.mul(share1, share2) -> Object (network operation)
-        share_methods.insert("mul".to_string(), ObjectMethodInfo {
-            parameters: vec![
-                SymbolType::Object("Share".to_string()),
-                SymbolType::Object("Share".to_string()),
-            ],
-            return_type: SymbolType::Object("Share".to_string()),
-            qualified_name: "Share.mul".to_string(),
-        });
+        // Share.mul and Share.send_to_client (HoneyBadger only - requires Beaver triples / client input)
+        #[cfg(feature = "honeybadger")]
+        {
+            // Share.mul(share1, share2) -> Object (network operation)
+            share_methods.insert("mul".to_string(), ObjectMethodInfo {
+                parameters: vec![
+                    SymbolType::Object("Share".to_string()),
+                    SymbolType::Object("Share".to_string()),
+                ],
+                return_type: SymbolType::Object("Share".to_string()),
+                qualified_name: "Share.mul".to_string(),
+            });
+
+            // Share.send_to_client(share, client_id) -> bool
+            share_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
+                parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+                return_type: SymbolType::Bool,
+                qualified_name: "Share.send_to_client".to_string(),
+            });
+        }
 
         // Share.open(share) -> int64/float (network operation)
         share_methods.insert("open".to_string(), ObjectMethodInfo {
             parameters: vec![SymbolType::Object("Share".to_string())],
             return_type: SymbolType::Int64, // Can also return Float depending on share type
             qualified_name: "Share.open".to_string(),
-        });
-
-        // Share.send_to_client(share, client_id) -> bool
-        share_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
-            return_type: SymbolType::Bool,
-            qualified_name: "Share.send_to_client".to_string(),
         });
 
         // Share.interpolate_local(shares_array) -> int64/float
@@ -589,6 +594,34 @@ impl SymbolTable {
             parameters: vec![],
             return_type: SymbolType::Int64,
             qualified_name: "Mpc.instance_id".to_string(),
+        });
+
+        // Mpc.supports_multiplication() -> bool
+        mpc_methods.insert("supports_multiplication".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Bool,
+            qualified_name: "Mpc.supports_multiplication".to_string(),
+        });
+
+        // Mpc.supports_dkg() -> bool
+        mpc_methods.insert("supports_dkg".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Bool,
+            qualified_name: "Mpc.supports_dkg".to_string(),
+        });
+
+        // Mpc.supports_client_input() -> bool
+        mpc_methods.insert("supports_client_input".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Bool,
+            qualified_name: "Mpc.supports_client_input".to_string(),
+        });
+
+        // Mpc.protocol_name() -> string
+        mpc_methods.insert("protocol_name".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::String,
+            qualified_name: "Mpc.protocol_name".to_string(),
         });
 
         self.builtin_objects.insert("Mpc".to_string(), BuiltinObjectInfo {
@@ -1169,8 +1202,11 @@ mod tests {
 
         // Should include builtin object methods as "Object.method"
         assert!(callables.contains(&"Share.open".to_string()));
-        assert!(callables.contains(&"Share.mul".to_string()));
-        assert!(callables.contains(&"ClientStore.take_share".to_string()));
+        #[cfg(feature = "honeybadger")]
+        {
+            assert!(callables.contains(&"Share.mul".to_string()));
+            assert!(callables.contains(&"ClientStore.take_share".to_string()));
+        }
         assert!(callables.contains(&"Mpc.party_id".to_string()));
     }
 
@@ -1201,6 +1237,7 @@ mod tests {
         let table = SymbolTable::new();
 
         // All builtin objects should be registered
+        #[cfg(feature = "honeybadger")]
         assert!(table.builtin_objects.contains_key("ClientStore"));
         assert!(table.builtin_objects.contains_key("Share"));
         assert!(table.builtin_objects.contains_key("Mpc"));
@@ -1214,11 +1251,14 @@ mod tests {
         let table = SymbolTable::new();
 
         // Builtin objects should be declared as symbols in global scope
-        let client_store = table.lookup_symbol("ClientStore");
-        assert!(client_store.is_some());
-        let info = client_store.unwrap();
-        assert!(matches!(info.kind, SymbolKind::BuiltinObject { .. }));
-        assert_eq!(info.symbol_type, SymbolType::Object("ClientStore".to_string()));
+        #[cfg(feature = "honeybadger")]
+        {
+            let client_store = table.lookup_symbol("ClientStore");
+            assert!(client_store.is_some());
+            let info = client_store.unwrap();
+            assert!(matches!(info.kind, SymbolKind::BuiltinObject { .. }));
+            assert_eq!(info.symbol_type, SymbolType::Object("ClientStore".to_string()));
+        }
 
         let share = table.lookup_symbol("Share");
         assert!(share.is_some());
@@ -1233,10 +1273,13 @@ mod tests {
     fn test_lookup_builtin_object() {
         let table = SymbolTable::new();
 
-        let client_store = table.lookup_builtin_object("ClientStore");
-        assert!(client_store.is_some());
-        let obj_info = client_store.unwrap();
-        assert!(!obj_info.methods.is_empty());
+        #[cfg(feature = "honeybadger")]
+        {
+            let client_store = table.lookup_builtin_object("ClientStore");
+            assert!(client_store.is_some());
+            let obj_info = client_store.unwrap();
+            assert!(!obj_info.methods.is_empty());
+        }
 
         // Non-existent object should return None
         assert!(table.lookup_builtin_object("NonExistent").is_none());
@@ -1246,6 +1289,7 @@ mod tests {
     // Tests for builtin object methods
     // ===========================================
 
+    #[cfg(feature = "honeybadger")]
     #[test]
     fn test_lookup_builtin_method_client_store() {
         let table = SymbolTable::new();
@@ -1294,10 +1338,13 @@ mod tests {
         assert_eq!(method.parameters[1], SymbolType::Object("Share".to_string()));
         assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
-        // Test mul method (network operation)
-        let mul = table.lookup_builtin_method("Share", "mul");
-        assert!(mul.is_some());
-        assert_eq!(mul.unwrap().qualified_name, "Share.mul");
+        // Test mul method (network operation, HoneyBadger only)
+        #[cfg(feature = "honeybadger")]
+        {
+            let mul = table.lookup_builtin_method("Share", "mul");
+            assert!(mul.is_some());
+            assert_eq!(mul.unwrap().qualified_name, "Share.mul");
+        }
 
         // Test open method
         let open = table.lookup_builtin_method("Share", "open");
@@ -1476,22 +1523,30 @@ mod tests {
         let table = SymbolTable::new();
         let share = table.lookup_builtin_object("Share").unwrap();
 
-        // Share should have these methods
-        let expected_methods = [
+        // Share methods available in all backends
+        let always_available = [
             "from_clear", "from_clear_int", "from_clear_fixed",
-            "add", "sub", "neg", "add_scalar", "mul_scalar", "mul",
-            "open", "send_to_client", "interpolate_local",
+            "add", "sub", "neg", "add_scalar", "mul_scalar",
+            "open", "interpolate_local",
             "get_type", "get_party_id", "batch_open"
         ];
 
-        for method_name in expected_methods {
+        for method_name in always_available {
             assert!(
                 share.methods.contains_key(method_name),
                 "Share should have method '{}'", method_name
             );
         }
+
+        // HoneyBadger-only methods
+        #[cfg(feature = "honeybadger")]
+        {
+            assert!(share.methods.contains_key("mul"), "Share should have method 'mul'");
+            assert!(share.methods.contains_key("send_to_client"), "Share should have method 'send_to_client'");
+        }
     }
 
+    #[cfg(feature = "honeybadger")]
     #[test]
     fn test_client_store_has_all_methods() {
         let table = SymbolTable::new();
@@ -1513,7 +1568,10 @@ mod tests {
         let table = SymbolTable::new();
         let mpc = table.lookup_builtin_object("Mpc").unwrap();
 
-        let expected_methods = ["party_id", "n_parties", "threshold", "is_ready", "instance_id"];
+        let expected_methods = [
+            "party_id", "n_parties", "threshold", "is_ready", "instance_id",
+            "supports_multiplication", "supports_dkg", "supports_client_input", "protocol_name",
+        ];
 
         for method_name in expected_methods {
             assert!(
@@ -1521,7 +1579,7 @@ mod tests {
                 "Mpc should have method '{}'", method_name
             );
         }
-        assert_eq!(mpc.methods.len(), 5);
+        assert_eq!(mpc.methods.len(), 9);
     }
 
     // ===========================================
