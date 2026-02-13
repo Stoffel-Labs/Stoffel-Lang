@@ -1,9 +1,9 @@
-# FizzBuzz sample that returns a deterministic value for VM testing
+# FizzBuzz sample that computes a checksum for VM testing
 # It iterates 1..100 and accumulates a checksum:
 # +3 for FizzBuzz (divisible by 15), +1 for Fizz (divisible by 3), +2 for Buzz (divisible by 5)
-# Returns the final sum so the VM runner can assert on a single integer.
+# Expected checksum: 126
 
-main main() -> int64:
+main main() -> nil:
   var sum = 0
 
   for i in 1..100:
@@ -18,4 +18,4 @@ main main() -> int64:
         else:
           discard i
 
-  return sum
+  discard sum
