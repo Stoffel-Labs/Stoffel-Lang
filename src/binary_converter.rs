@@ -424,7 +424,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
     use std::fmt::Write as _;
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum Ty {
-        I64, I32, I16, I8, U64, U32, U16, U8, Float, Bool, String, Object, Array, Foreign, Closure, Unit, Share, Number, Unknown,
+        I64, I32, I16, I8, U64, U32, U16, U8, Float, Bool, String, Object, Array, Foreign, Closure, Unit, Share, PendingReveal, Number, Unknown,
     }
     impl Ty {
         fn from_value(v: &Value) -> Ty {
@@ -446,6 +446,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 Value::Closure(_) => Ty::Closure,
                 Value::Unit => Ty::Unit,
                 Value::Share(_, _) => Ty::Share,
+                Value::PendingReveal(_) => Ty::PendingReveal,
             }
         }
         fn is_integer(&self) -> bool {
@@ -461,6 +462,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 Ty::Float=>"float", Ty::Bool=>"bool", Ty::String=>"string",
                 Ty::Object=>"object", Ty::Array=>"array", Ty::Foreign=>"foreign",
                 Ty::Closure=>"closure", Ty::Unit=>"unit", Ty::Share=>"secret",
+                Ty::PendingReveal=>"pending_reveal",
                 Ty::Number=>"number", Ty::Unknown=>"unknown",
             }; write!(f, "{}", s)
         }
@@ -470,6 +472,8 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
         match (a,b) {
             // Secret dominates: any mix with secret stays secret
             (Share, _) | (_, Share) => Share,
+            // PendingReveal is MPC-specific like Share
+            (PendingReveal, _) | (_, PendingReveal) => PendingReveal,
             (Unknown, t) | (t, Unknown) => t.clone(),
             (Unit, Unit) => Unit,
             (Bool, Bool) => Bool,
