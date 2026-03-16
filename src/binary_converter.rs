@@ -442,6 +442,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 Value::Closure(_) => Ty::Closure,
                 Value::Unit => Ty::Unit,
                 Value::Share(_, _) => Ty::Share,
+                _ => Ty::Unit,
             }
         }
         fn is_integer(&self) -> bool {
