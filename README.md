@@ -104,3 +104,8 @@ The binary format includes:
 - Function definitions with metadata
 - Optimized bytecode instructions
 - Constant pools for efficient value storage
+
+## Learn More
+
+To learn more about what you can build with Stoffel, visit 
+[stoffelmpc.com](https://stoffelmpc.com?utm_source=github&utm_medium=readme&utm_campaign=stoffel-lang-repo&utm_term=mpc)
