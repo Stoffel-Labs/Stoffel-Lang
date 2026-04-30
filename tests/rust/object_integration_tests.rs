@@ -4,7 +4,7 @@
 //! for object-related features in Stoffel-Lang.
 //!
 //! Current focus areas:
-//! - Builtin singleton objects (ClientStore, Share, Mpc, Rbc, Aba, ConsensusValue)
+//! - Builtin singleton objects (ClientStore, Share, Mpc, MpcOutput, Rbc, Aba, Bytes, Crypto, Avss)
 //! - Method call syntax (obj.method(args))
 //! - UFCS transformation
 //! - Field access
@@ -387,22 +387,23 @@ var result = Aba.propose_and_wait(true, 1000)
 }
 
 // ===========================================
-// ConsensusValue Object Tests - Full Pipeline
+// Bytes/Crypto Object Tests - Full Pipeline
 // ===========================================
 
 #[test]
-fn test_consensus_propose() {
+fn test_bytes_from_string() {
     let source = r#"
-ConsensusValue.propose(42)
+var msg = Bytes.from_string("hello")
 "#;
     assert!(compile_source(source).is_ok());
 }
 
 #[test]
-fn test_consensus_get() {
+fn test_crypto_hash() {
     let source = r#"
-var cv = ConsensusValue.propose(42)
-var value = ConsensusValue.get(cv, 1000)
+var msg = Bytes.from_string("hello")
+var digest = Crypto.sha256(msg)
+var field = Crypto.hash_to_field(digest, "bls12-381")
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -505,7 +506,7 @@ fn test_mpc_protocol_simulation() {
 def leader_election() -> int64:
   var my_id = Mpc.party_id()
   var n = Mpc.n_parties()
-  ConsensusValue.propose(my_id)
+  var nonce = Mpc.rand_int(64)
   return my_id
 
 main main() -> nil:

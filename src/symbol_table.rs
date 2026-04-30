@@ -190,9 +190,10 @@ impl SymbolType {
                 "u16" | "uint16" => SymbolType::UInt16,
                 "u8"  | "uint8"  => SymbolType::UInt8,
                 // Other primitives
-                "float" => SymbolType::Float,
+                "float" | "float64" | "f64" => SymbolType::Float,
                 "string" => SymbolType::String,
-                "bool" => SymbolType::Bool,
+                "bool" | "boolean" => SymbolType::Bool,
+                "bytes" | "ByteArray" => SymbolType::List(Box::new(SymbolType::UInt8)),
                 "void" => SymbolType::Void, // Assuming 'void' keyword exists or is inferred
                 "nil" => SymbolType::Nil,
                 _ => SymbolType::TypeName(name.clone()),
@@ -369,7 +370,7 @@ impl SymbolTable {
         let print_info = SymbolInfo {
             name: "print".to_string(),
             kind: SymbolKind::BuiltinFunction {
-                parameters: vec![SymbolType::String],
+                parameters: vec![SymbolType::Unknown],
                 return_type: SymbolType::Void,
             },
             symbol_type: SymbolType::Void, // Type of the function itself (its return type here)
@@ -378,6 +379,20 @@ impl SymbolTable {
         };
         if let Err(e) = global_scope.declare(print_info) {
              self.errors.push((e, SourceLocation::default())); // Use default location for internal errors
+        }
+
+        let type_info = SymbolInfo {
+            name: "type".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Unknown],
+                return_type: SymbolType::String,
+            },
+            symbol_type: SymbolType::String,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(type_info) {
+            self.errors.push((e, SourceLocation::default()));
         }
 
         // Add ClientStore as a builtin object with methods
@@ -416,6 +431,30 @@ impl SymbolTable {
             self.errors.push((e, SourceLocation::default()));
         }
 
+        // MpcOutput - private output delivery to clients
+        let mut mpc_output_methods = HashMap::new();
+        mpc_output_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64, SymbolType::Secret(Box::new(SymbolType::Unknown))],
+            return_type: SymbolType::Bool,
+            qualified_name: "MpcOutput.send_to_client".to_string(),
+        });
+
+        self.builtin_objects.insert("MpcOutput".to_string(), BuiltinObjectInfo {
+            name: "MpcOutput".to_string(),
+            methods: mpc_output_methods,
+        });
+
+        let mpc_output_info = SymbolInfo {
+            name: "MpcOutput".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "MpcOutput".to_string() },
+            symbol_type: SymbolType::Object("MpcOutput".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(mpc_output_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
         // =====================================================================
         // Share - Secret share operations (matches VM mpc_builtins.rs)
         // =====================================================================
@@ -423,116 +462,165 @@ impl SymbolTable {
 
         // Share.from_clear(value) -> Object (share object)
         share_methods.insert("from_clear".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64], // Also accepts Float, Bool at runtime
+            parameters: vec![SymbolType::Unknown],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.from_clear".to_string(),
         });
 
         // Share.from_clear_int(value, bit_length) -> Object
         share_methods.insert("from_clear_int".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64, SymbolType::Int64],
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.from_clear_int".to_string(),
         });
 
         // Share.from_clear_fixed(value, total_bits, frac_bits) -> Object
         share_methods.insert("from_clear_fixed".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Float, SymbolType::Int64, SymbolType::Int64],
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64, SymbolType::Int64],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.from_clear_fixed".to_string(),
         });
 
         // Share.add(share1, share2) -> Object (local operation)
         share_methods.insert("add".to_string(), ObjectMethodInfo {
-            parameters: vec![
-                SymbolType::Object("Share".to_string()),
-                SymbolType::Object("Share".to_string()),
-            ],
+            parameters: vec![SymbolType::Unknown, SymbolType::Unknown],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.add".to_string(),
         });
 
         // Share.sub(share1, share2) -> Object (local operation)
         share_methods.insert("sub".to_string(), ObjectMethodInfo {
-            parameters: vec![
-                SymbolType::Object("Share".to_string()),
-                SymbolType::Object("Share".to_string()),
-            ],
+            parameters: vec![SymbolType::Unknown, SymbolType::Unknown],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.sub".to_string(),
         });
 
         // Share.neg(share) -> Object (local operation)
         share_methods.insert("neg".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string())],
+            parameters: vec![SymbolType::Unknown],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.neg".to_string(),
         });
 
         // Share.add_scalar(share, scalar) -> Object (local operation)
         share_methods.insert("add_scalar".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.add_scalar".to_string(),
         });
 
         // Share.mul_scalar(share, scalar) -> Object (local operation)
         share_methods.insert("mul_scalar".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.mul_scalar".to_string(),
         });
 
         // Share.mul(share1, share2) -> Object (network operation)
         share_methods.insert("mul".to_string(), ObjectMethodInfo {
-            parameters: vec![
-                SymbolType::Object("Share".to_string()),
-                SymbolType::Object("Share".to_string()),
-            ],
+            parameters: vec![SymbolType::Unknown, SymbolType::Unknown],
             return_type: SymbolType::Object("Share".to_string()),
             qualified_name: "Share.mul".to_string(),
         });
 
         // Share.open(share) -> int64/float (network operation)
         share_methods.insert("open".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string())],
+            parameters: vec![SymbolType::Unknown],
             return_type: SymbolType::Int64, // Can also return Float depending on share type
             qualified_name: "Share.open".to_string(),
         });
 
         // Share.send_to_client(share, client_id) -> bool
         share_methods.insert("send_to_client".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string()), SymbolType::Int64],
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64],
             return_type: SymbolType::Bool,
             qualified_name: "Share.send_to_client".to_string(),
         });
 
         // Share.interpolate_local(shares_array) -> int64/float
         share_methods.insert("interpolate_local".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
+            parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
             return_type: SymbolType::Int64,
             qualified_name: "Share.interpolate_local".to_string(),
         });
 
         // Share.get_type(share) -> string
         share_methods.insert("get_type".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string())],
+            parameters: vec![SymbolType::Unknown],
             return_type: SymbolType::String,
             qualified_name: "Share.get_type".to_string(),
         });
 
         // Share.get_party_id(share) -> int64
         share_methods.insert("get_party_id".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("Share".to_string())],
+            parameters: vec![SymbolType::Unknown],
             return_type: SymbolType::Int64,
             qualified_name: "Share.get_party_id".to_string(),
         });
 
         // Share.batch_open(shares_array) -> List[int64/float]
         share_methods.insert("batch_open".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))],
+            parameters: vec![SymbolType::List(Box::new(SymbolType::Unknown))],
             return_type: SymbolType::List(Box::new(SymbolType::Unknown)), // Can be int64 or float
             qualified_name: "Share.batch_open".to_string(),
+        });
+
+        let byte_array_type = SymbolType::List(Box::new(SymbolType::UInt8));
+
+        // Share.open_exp(share, curve_name) -> byte array
+        share_methods.insert("open_exp".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown, SymbolType::String],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Share.open_exp".to_string(),
+        });
+
+        // Share.random() -> Object
+        share_methods.insert("random".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.random".to_string(),
+        });
+
+        // Share.get_commitment(share, index) -> byte array
+        share_methods.insert("get_commitment".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown, SymbolType::Int64],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Share.get_commitment".to_string(),
+        });
+
+        // Share.commitment_count(share) -> int64
+        share_methods.insert("commitment_count".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown],
+            return_type: SymbolType::Int64,
+            qualified_name: "Share.commitment_count".to_string(),
+        });
+
+        // Share.has_commitments(share) -> bool
+        share_methods.insert("has_commitments".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown],
+            return_type: SymbolType::Bool,
+            qualified_name: "Share.has_commitments".to_string(),
+        });
+
+        // Share.mul_field(share, field_bytes) -> Object
+        share_methods.insert("mul_field".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown, byte_array_type.clone()],
+            return_type: SymbolType::Object("Share".to_string()),
+            qualified_name: "Share.mul_field".to_string(),
+        });
+
+        // Share.open_field(share) -> byte array
+        share_methods.insert("open_field".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Share.open_field".to_string(),
+        });
+
+        // Share.open_exp_custom(share, generator_bytes) -> byte array
+        share_methods.insert("open_exp_custom".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown, byte_array_type.clone()],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Share.open_exp_custom".to_string(),
         });
 
         self.builtin_objects.insert("Share".to_string(), BuiltinObjectInfo {
@@ -589,6 +677,20 @@ impl SymbolTable {
             parameters: vec![],
             return_type: SymbolType::Int64,
             qualified_name: "Mpc.instance_id".to_string(),
+        });
+
+        // Mpc.rand() -> byte array
+        mpc_methods.insert("rand".to_string(), ObjectMethodInfo {
+            parameters: vec![],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Mpc.rand".to_string(),
+        });
+
+        // Mpc.rand_int(bit_length) -> uint8/uint16/uint32/uint64
+        mpc_methods.insert("rand_int".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Int64],
+            return_type: SymbolType::UInt64,
+            qualified_name: "Mpc.rand_int".to_string(),
         });
 
         self.builtin_objects.insert("Mpc".to_string(), BuiltinObjectInfo {
@@ -692,45 +794,135 @@ impl SymbolTable {
         }
 
         // =====================================================================
-        // ConsensusValue - Consensus value protocol (matches VM mpc_builtins.rs)
+        // Bytes - byte array helpers (matches VM mpc_builtins.rs)
         // =====================================================================
-        let mut consensus_value_methods = HashMap::new();
+        let mut bytes_methods = HashMap::new();
 
-        // ConsensusValue.propose(value: int64) -> Object (session) (stubbed in VM)
-        consensus_value_methods.insert("propose".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Int64],
-            return_type: SymbolType::Object("ConsensusValueSession".to_string()),
-            qualified_name: "ConsensusValue.propose".to_string(),
+        bytes_methods.insert("concat".to_string(), ObjectMethodInfo {
+            parameters: vec![byte_array_type.clone(), byte_array_type.clone()],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Bytes.concat".to_string(),
         });
 
-        // ConsensusValue.get(session, timeout_ms: int64) -> int64 (stubbed in VM)
-        consensus_value_methods.insert("get".to_string(), ObjectMethodInfo {
-            parameters: vec![SymbolType::Object("ConsensusValueSession".to_string()), SymbolType::Int64],
-            return_type: SymbolType::Int64,
-            qualified_name: "ConsensusValue.get".to_string(),
+        bytes_methods.insert("from_string".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::String],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Bytes.from_string".to_string(),
         });
 
-        self.builtin_objects.insert("ConsensusValue".to_string(), BuiltinObjectInfo {
-            name: "ConsensusValue".to_string(),
-            methods: consensus_value_methods,
+        self.builtin_objects.insert("Bytes".to_string(), BuiltinObjectInfo {
+            name: "Bytes".to_string(),
+            methods: bytes_methods,
         });
 
-        let consensus_value_info = SymbolInfo {
-            name: "ConsensusValue".to_string(),
-            kind: SymbolKind::BuiltinObject { object_type_name: "ConsensusValue".to_string() },
-            symbol_type: SymbolType::Object("ConsensusValue".to_string()),
+        let bytes_info = SymbolInfo {
+            name: "Bytes".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Bytes".to_string() },
+            symbol_type: SymbolType::Object("Bytes".to_string()),
             is_secret: false,
             defined_at: SourceLocation::default(),
         };
-        if let Err(e) = global_scope.declare(consensus_value_info) {
+        if let Err(e) = global_scope.declare(bytes_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Crypto - hashing and curve helpers (matches VM mpc_builtins.rs)
+        // =====================================================================
+        let mut crypto_methods = HashMap::new();
+
+        crypto_methods.insert("sha256".to_string(), ObjectMethodInfo {
+            parameters: vec![byte_array_type.clone()],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Crypto.sha256".to_string(),
+        });
+
+        crypto_methods.insert("sha512".to_string(), ObjectMethodInfo {
+            parameters: vec![byte_array_type.clone()],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Crypto.sha512".to_string(),
+        });
+
+        crypto_methods.insert("hash_to_field".to_string(), ObjectMethodInfo {
+            parameters: vec![byte_array_type.clone(), SymbolType::String],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Crypto.hash_to_field".to_string(),
+        });
+
+        crypto_methods.insert("hash_to_g1".to_string(), ObjectMethodInfo {
+            parameters: vec![byte_array_type.clone()],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Crypto.hash_to_g1".to_string(),
+        });
+
+        self.builtin_objects.insert("Crypto".to_string(), BuiltinObjectInfo {
+            name: "Crypto".to_string(),
+            methods: crypto_methods,
+        });
+
+        let crypto_info = SymbolInfo {
+            name: "Crypto".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Crypto".to_string() },
+            symbol_type: SymbolType::Object("Crypto".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(crypto_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        // =====================================================================
+        // Avss - AVSS share helpers (registered by the VM's avss feature)
+        // =====================================================================
+        let mut avss_methods = HashMap::new();
+
+        avss_methods.insert("get_commitment".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("AvssShare".to_string()), SymbolType::Int64],
+            return_type: byte_array_type.clone(),
+            qualified_name: "Avss.get_commitment".to_string(),
+        });
+
+        avss_methods.insert("get_key_name".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("AvssShare".to_string())],
+            return_type: SymbolType::String,
+            qualified_name: "Avss.get_key_name".to_string(),
+        });
+
+        avss_methods.insert("commitment_count".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Object("AvssShare".to_string())],
+            return_type: SymbolType::Int64,
+            qualified_name: "Avss.commitment_count".to_string(),
+        });
+
+        avss_methods.insert("is_avss_share".to_string(), ObjectMethodInfo {
+            parameters: vec![SymbolType::Unknown],
+            return_type: SymbolType::Bool,
+            qualified_name: "Avss.is_avss_share".to_string(),
+        });
+
+        self.builtin_objects.insert("Avss".to_string(), BuiltinObjectInfo {
+            name: "Avss".to_string(),
+            methods: avss_methods,
+        });
+
+        let avss_info = SymbolInfo {
+            name: "Avss".to_string(),
+            kind: SymbolKind::BuiltinObject { object_type_name: "Avss".to_string() },
+            symbol_type: SymbolType::Object("Avss".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(avss_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
         // Add built-in types (integers, string, bool, float, nil, void)
         for type_name in [
-            "int64", "int32", "int16", "int8",
+            "int", "int64", "int32", "int16", "int8",
             "uint64", "uint32", "uint16", "uint8",
-            "string", "bool", "float", "nil", "void"
+            "string", "bool", "boolean", "float", "float64", "f64",
+            "bytes", "ByteArray", "Object", "AvssShare", "RbcResult", "Closure",
+            "nil", "void"
         ] {
              let type_info = SymbolInfo {
                  name: type_name.to_string(),
@@ -798,6 +990,62 @@ impl SymbolTable {
             defined_at: SourceLocation::default(),
         };
         if let Err(e) = global_scope.declare(set_field_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let create_closure_info = SymbolInfo {
+            name: "create_closure".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String],
+                return_type: SymbolType::Object("Closure".to_string()),
+            },
+            symbol_type: SymbolType::Object("Closure".to_string()),
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(create_closure_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let call_closure_info = SymbolInfo {
+            name: "call_closure".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::Object("Closure".to_string())],
+                return_type: SymbolType::Unknown,
+            },
+            symbol_type: SymbolType::Unknown,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(call_closure_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let get_upvalue_info = SymbolInfo {
+            name: "get_upvalue".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String],
+                return_type: SymbolType::Unknown,
+            },
+            symbol_type: SymbolType::Unknown,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(get_upvalue_info) {
+            self.errors.push((e, SourceLocation::default()));
+        }
+
+        let set_upvalue_info = SymbolInfo {
+            name: "set_upvalue".to_string(),
+            kind: SymbolKind::BuiltinFunction {
+                parameters: vec![SymbolType::String, SymbolType::Unknown],
+                return_type: SymbolType::Void,
+            },
+            symbol_type: SymbolType::Void,
+            is_secret: false,
+            defined_at: SourceLocation::default(),
+        };
+        if let Err(e) = global_scope.declare(set_upvalue_info) {
             self.errors.push((e, SourceLocation::default()));
         }
 
@@ -1204,9 +1452,12 @@ mod tests {
         assert!(table.builtin_objects.contains_key("ClientStore"));
         assert!(table.builtin_objects.contains_key("Share"));
         assert!(table.builtin_objects.contains_key("Mpc"));
+        assert!(table.builtin_objects.contains_key("MpcOutput"));
         assert!(table.builtin_objects.contains_key("Rbc"));
         assert!(table.builtin_objects.contains_key("Aba"));
-        assert!(table.builtin_objects.contains_key("ConsensusValue"));
+        assert!(table.builtin_objects.contains_key("Bytes"));
+        assert!(table.builtin_objects.contains_key("Crypto"));
+        assert!(table.builtin_objects.contains_key("Avss"));
     }
 
     #[test]
@@ -1285,13 +1536,13 @@ mod tests {
         assert_eq!(method.parameters.len(), 1);
         assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
-        // Test add method (two Share arguments)
+        // Test add method (raw Share values or Share objects)
         let add = table.lookup_builtin_method("Share", "add");
         assert!(add.is_some());
         let method = add.unwrap();
         assert_eq!(method.parameters.len(), 2);
-        assert_eq!(method.parameters[0], SymbolType::Object("Share".to_string()));
-        assert_eq!(method.parameters[1], SymbolType::Object("Share".to_string()));
+        assert_eq!(method.parameters[0], SymbolType::Unknown);
+        assert_eq!(method.parameters[1], SymbolType::Unknown);
         assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
         // Test mul method (network operation)
@@ -1376,22 +1627,27 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_builtin_method_consensus_value() {
+    fn test_lookup_builtin_method_bytes_crypto_avss() {
         let table = SymbolTable::new();
 
-        // Test propose method
-        let propose = table.lookup_builtin_method("ConsensusValue", "propose");
-        assert!(propose.is_some());
-        let method = propose.unwrap();
-        assert_eq!(method.parameters.len(), 1);
-        assert_eq!(method.return_type, SymbolType::Object("ConsensusValueSession".to_string()));
+        let bytes = SymbolType::List(Box::new(SymbolType::UInt8));
 
-        // Test get method
-        let get = table.lookup_builtin_method("ConsensusValue", "get");
-        assert!(get.is_some());
-        let method = get.unwrap();
+        let from_string = table.lookup_builtin_method("Bytes", "from_string");
+        assert!(from_string.is_some());
+        let method = from_string.unwrap();
+        assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.parameters[0], SymbolType::String);
+        assert_eq!(method.return_type, bytes);
+
+        let hash_to_field = table.lookup_builtin_method("Crypto", "hash_to_field");
+        assert!(hash_to_field.is_some());
+        let method = hash_to_field.unwrap();
         assert_eq!(method.parameters.len(), 2);
-        assert_eq!(method.return_type, SymbolType::Int64);
+        assert_eq!(method.parameters[1], SymbolType::String);
+
+        let is_avss_share = table.lookup_builtin_method("Avss", "is_avss_share");
+        assert!(is_avss_share.is_some());
+        assert_eq!(is_avss_share.unwrap().return_type, SymbolType::Bool);
     }
 
     #[test]
@@ -1481,7 +1737,9 @@ mod tests {
             "from_clear", "from_clear_int", "from_clear_fixed",
             "add", "sub", "neg", "add_scalar", "mul_scalar", "mul",
             "open", "send_to_client", "interpolate_local",
-            "get_type", "get_party_id", "batch_open"
+            "get_type", "get_party_id", "batch_open", "open_exp",
+            "random", "get_commitment", "commitment_count",
+            "has_commitments", "mul_field", "open_field", "open_exp_custom"
         ];
 
         for method_name in expected_methods {
@@ -1513,7 +1771,15 @@ mod tests {
         let table = SymbolTable::new();
         let mpc = table.lookup_builtin_object("Mpc").unwrap();
 
-        let expected_methods = ["party_id", "n_parties", "threshold", "is_ready", "instance_id"];
+        let expected_methods = [
+            "party_id",
+            "n_parties",
+            "threshold",
+            "is_ready",
+            "instance_id",
+            "rand",
+            "rand_int",
+        ];
 
         for method_name in expected_methods {
             assert!(
@@ -1521,7 +1787,7 @@ mod tests {
                 "Mpc should have method '{}'", method_name
             );
         }
-        assert_eq!(mpc.methods.len(), 5);
+        assert_eq!(mpc.methods.len(), expected_methods.len());
     }
 
     // ===========================================
@@ -1594,16 +1860,14 @@ mod tests {
 
     #[test]
     fn test_list_of_objects_type() {
-        let list_of_shares = SymbolType::List(Box::new(SymbolType::Object("Share".to_string())));
-
-        // Check interpolate_local accepts list of shares
+        // Check interpolate_local accepts arrays that can hold either raw shares or Share objects.
         let table = SymbolTable::new();
         let interpolate = table.lookup_builtin_method("Share", "interpolate_local").unwrap();
 
         assert_eq!(interpolate.parameters.len(), 1);
         assert_eq!(
             interpolate.parameters[0],
-            SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))
+            SymbolType::List(Box::new(SymbolType::Unknown))
         );
     }
 
