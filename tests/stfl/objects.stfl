@@ -139,7 +139,8 @@ main main() -> nil:
   # Test Aba methods
   Aba.propose(true)
 
-  # Test ConsensusValue methods
-  ConsensusValue.propose(42)
+  # Test byte and crypto helpers
+  var msg_bytes = Bytes.from_string("hello")
+  var digest = Crypto.sha256(msg_bytes)
 
   print("Object syntax tests completed")

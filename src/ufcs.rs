@@ -7,9 +7,12 @@ const BUILTIN_OBJECTS: &[&str] = &[
     "ClientStore",
     "Share",
     "Mpc",
+    "MpcOutput",
     "Rbc",
     "Aba",
-    "ConsensusValue",
+    "Bytes",
+    "Crypto",
+    "Avss",
 ];
 
 /// Checks if a name is a builtin object that uses qualified method names

@@ -49,10 +49,16 @@ impl CodeGenerator {
         known_builtins.insert("set_field".to_string());
         known_builtins.insert("array_push".to_string());
         known_builtins.insert("array_length".to_string());
+        known_builtins.insert("create_closure".to_string());
+        known_builtins.insert("call_closure".to_string());
+        known_builtins.insert("get_upvalue".to_string());
+        known_builtins.insert("set_upvalue".to_string());
+        known_builtins.insert("type".to_string());
         // ClientStore builtin object methods (qualified names)
         known_builtins.insert("ClientStore.take_share".to_string());
         known_builtins.insert("ClientStore.take_share_fixed".to_string());
         known_builtins.insert("ClientStore.get_number_clients".to_string());
+        known_builtins.insert("MpcOutput.send_to_client".to_string());
 
         // Share builtin object methods (matches VM mpc_builtins.rs)
         known_builtins.insert("Share.from_clear".to_string());
@@ -76,6 +82,8 @@ impl CodeGenerator {
         known_builtins.insert("Mpc.threshold".to_string());
         known_builtins.insert("Mpc.is_ready".to_string());
         known_builtins.insert("Mpc.instance_id".to_string());
+        known_builtins.insert("Mpc.rand".to_string());
+        known_builtins.insert("Mpc.rand_int".to_string());
 
         // Rbc builtin object methods (Reliable Broadcast)
         known_builtins.insert("Rbc.broadcast".to_string());
@@ -89,10 +97,28 @@ impl CodeGenerator {
 
         // Share.batch_open (was missing)
         known_builtins.insert("Share.batch_open".to_string());
+        known_builtins.insert("Share.open_exp".to_string());
+        known_builtins.insert("Share.random".to_string());
+        known_builtins.insert("Share.get_commitment".to_string());
+        known_builtins.insert("Share.commitment_count".to_string());
+        known_builtins.insert("Share.has_commitments".to_string());
+        known_builtins.insert("Share.mul_field".to_string());
+        known_builtins.insert("Share.open_field".to_string());
+        known_builtins.insert("Share.open_exp_custom".to_string());
 
-        // ConsensusValue builtin object methods
-        known_builtins.insert("ConsensusValue.propose".to_string());
-        known_builtins.insert("ConsensusValue.get".to_string());
+        // Crypto and byte-array builtins
+        known_builtins.insert("Bytes.concat".to_string());
+        known_builtins.insert("Bytes.from_string".to_string());
+        known_builtins.insert("Crypto.sha256".to_string());
+        known_builtins.insert("Crypto.sha512".to_string());
+        known_builtins.insert("Crypto.hash_to_field".to_string());
+        known_builtins.insert("Crypto.hash_to_g1".to_string());
+
+        // AVSS object helpers
+        known_builtins.insert("Avss.get_commitment".to_string());
+        known_builtins.insert("Avss.get_key_name".to_string());
+        known_builtins.insert("Avss.commitment_count".to_string());
+        known_builtins.insert("Avss.is_avss_share".to_string());
 
         CodeGenerator {
             current_instructions: Vec::new(),
