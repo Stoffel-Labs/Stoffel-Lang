@@ -58,8 +58,6 @@ pub struct MultiFileCompiler {
     options: CompilerOptions,
     /// Compiled modules indexed by module path string
     compiled_modules: HashMap<String, CompiledModule>,
-    /// All errors encountered
-    errors: Vec<CompilerError>,
 }
 
 impl MultiFileCompiler {
@@ -68,7 +66,6 @@ impl MultiFileCompiler {
             resolver: ModuleResolver::new(),
             options,
             compiled_modules: HashMap::new(),
-            errors: Vec::new(),
         }
     }
 
@@ -467,6 +464,5 @@ def main() -> int64:
         let options = CompilerOptions::default();
         let compiler = MultiFileCompiler::new(options);
         assert!(compiler.compiled_modules.is_empty());
-        assert!(compiler.errors.is_empty());
     }
 }

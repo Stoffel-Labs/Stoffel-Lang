@@ -13,11 +13,8 @@
 use stoffel_vm_types::instructions::Instruction;
 use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 use stoffellang::compiler::{compile, CompilerOptions};
-use stoffellang::errors::ErrorReporter;
 use stoffellang::lexer::tokenize;
 use stoffellang::parser::parse;
-use stoffellang::semantic::analyze;
-use stoffellang::ufcs::transform_ufcs;
 
 // ===========================================
 // Helper functions
@@ -35,22 +32,6 @@ fn default_options() -> CompilerOptions {
 fn parse_source(source: &str) -> Result<(), String> {
     let tokens = tokenize(source, "test.stfl").map_err(|e| e.message)?;
     parse(&tokens, "test.stfl").map_err(|e| e.message)?;
-    Ok(())
-}
-
-/// Runs full semantic analysis pipeline and returns success/failure
-fn analyze_source(source: &str) -> Result<(), Vec<String>> {
-    let tokens = tokenize(source, "test.stfl").map_err(|e| vec![e.message])?;
-    let ast = parse(&tokens, "test.stfl").map_err(|e| vec![e.message])?;
-    let transformed = transform_ufcs(ast);
-    let mut reporter = ErrorReporter::new();
-    analyze(transformed, &mut reporter, "test.stfl").map_err(|_| {
-        reporter
-            .get_all()
-            .iter()
-            .map(|e| e.message.clone())
-            .collect::<Vec<_>>()
-    })?;
     Ok(())
 }
 

@@ -381,7 +381,7 @@ fn infer_function_arities(program: &CompiledProgram) -> HashMap<String, usize> {
 
     let mut map: HashMap<String, usize> = HashMap::new();
     scan_chunk(&mut map, &program.main_chunk);
-    for (_name, chunk) in &program.function_chunks {
+    for chunk in program.function_chunks.values() {
         scan_chunk(&mut map, chunk);
     }
     map
@@ -437,7 +437,6 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 Value::Closure(_) => Ty::Closure,
                 Value::Unit => Ty::Unit,
                 Value::Share(_, _) => Ty::Share,
-                _ => Ty::Unit,
             }
         }
         fn is_integer(&self) -> bool {
@@ -445,9 +444,6 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 self,
                 Ty::I64 | Ty::I32 | Ty::I16 | Ty::I8 | Ty::U64 | Ty::U32 | Ty::U16 | Ty::U8
             )
-        }
-        fn is_numeric(&self) -> bool {
-            self.is_integer() || matches!(self, Ty::Float)
         }
     }
     impl std::fmt::Display for Ty {
@@ -517,7 +513,7 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
     let mut sig_map: HashMap<String, Vec<Ty>> = HashMap::new();
 
     // We need per-function simple register type propagation to read types at PUSHARG
-    fn infer_reg_types(func: &CompiledFunction, constants: &Vec<Value>) -> Vec<Ty> {
+    fn infer_reg_types(func: &CompiledFunction, constants: &[Value]) -> Vec<Ty> {
         // Size the register type vector by the absolute max register index used, not by func.register_count,
         // because register_count is (clear_used + secret_used), while physical indices are absolute.
         const SECRET_REGISTER_START: usize = DEFAULT_SECRET_REGISTER_START;
@@ -554,8 +550,12 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
         let mut regs = vec![Ty::Unknown; (max_abs + 1).max(1)];
         let is_secret_reg = |r: usize| r >= SECRET_REGISTER_START;
         // Initialize secrecy for secret bank registers so reads reflect secrecy even before writes
-        for r in SECRET_REGISTER_START..=max_abs {
-            regs[r] = Ty::Share;
+        for reg in regs
+            .iter_mut()
+            .take(max_abs + 1)
+            .skip(SECRET_REGISTER_START)
+        {
+            *reg = Ty::Share;
         }
 
         for instr in &func.instructions {

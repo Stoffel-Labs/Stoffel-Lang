@@ -176,7 +176,7 @@ impl CodeGenerator {
                 Ok((vr, false)) // Return VR and its secrecy (false)
             }
             // --- Identifiers ---
-            AstNode::Identifier(name, location) => {
+            AstNode::Identifier(name, _location) => {
                 // Semantic analysis already verified this identifier exists.
                 // Look it up to get its register.
                 if let Some(&vr_index) = self.symbol_table.get(name) {
@@ -198,9 +198,9 @@ impl CodeGenerator {
                 name,
                 value,
                 type_annotation,
-                is_mutable,
+                is_mutable: _,
                 is_secret,
-                location,
+                location: _,
             } => {
                 // Determine if the initial value needs a secret register
                 // Secrecy comes from a `secret` type annotation.
@@ -380,7 +380,7 @@ impl CodeGenerator {
                         Ok((bool_dest_vr, result_is_secret))
                     },
                     _ => Err(CompilerError::semantic_error(format!("Unsupported binary operator: {}", op), location.clone())
-                        .with_hint(format!("Supported operators are: +, -, *, /, ==, !=, <, <=, >, >="))),
+                        .with_hint("Supported operators are: +, -, *, /, ==, !=, <, <=, >, >=".to_string())),
                 }
             }
             // --- Assignment ---
@@ -390,8 +390,8 @@ impl CodeGenerator {
                 location,
             } => {
                 match target.as_ref() {
-                    AstNode::Identifier(name, target_loc) => {
-                        let (value_vr, value_is_secret) = self.compile_node(value)?;
+                    AstNode::Identifier(name, _target_loc) => {
+                        let (value_vr, _value_is_secret) = self.compile_node(value)?;
                         let dest_vr_index =
                             self.symbol_table.get(name).cloned().ok_or_else(|| {
                                 CompilerError::internal_error(format!(
@@ -467,7 +467,7 @@ impl CodeGenerator {
             AstNode::FunctionCall {
                 function,
                 arguments,
-                location,
+                location: _,
                 resolved_return_type,
             } => {
                 // 1. Identify the function name
@@ -548,7 +548,7 @@ impl CodeGenerator {
                 // --- Then Branch ---
                 let (then_vr, then_is_secret) = self.compile_node(then_branch)?;
                 // Provisional result register uses then-branch secrecy; may be updated after else
-                let mut result_is_secret = then_is_secret;
+                let result_is_secret = then_is_secret;
                 let result_vr = self.allocate_virtual_register(result_is_secret);
                 self.emit(Instruction::MOV(result_vr.0, then_vr.0));
                 // Skip else branch after executing then branch
@@ -604,7 +604,7 @@ impl CodeGenerator {
             }
             AstNode::DiscardStatement {
                 expression,
-                location,
+                location: _,
             } => {
                 let (vr, is_secret) = self.compile_node(expression)?;
                 // The VR's live range ends here. Allocator handles it.
@@ -613,9 +613,9 @@ impl CodeGenerator {
             AstNode::FieldAccess {
                 object,
                 field_name,
-                location,
+                location: _,
             } => {
-                let (object_vr, object_is_secret) = self.compile_node(object)?;
+                let (object_vr, _object_is_secret) = self.compile_node(object)?;
 
                 // Load field name as string constant
                 let field_const = Constant::String(field_name.clone());
@@ -641,7 +641,7 @@ impl CodeGenerator {
             AstNode::WhileLoop {
                 condition,
                 body,
-                location,
+                location: _,
             } => {
                 let loop_start_label = format!("loop_start_{}", self.current_instructions.len());
                 let end_loop_label = format!("loop_end_{}", self.current_instructions.len());
@@ -771,8 +771,7 @@ impl CodeGenerator {
                     _ => {
                         // Collection iteration: for item in list
                         // Compile the collection expression
-                        let (collection_vr, collection_is_secret) =
-                            self.compile_node(&*iterable)?;
+                        let (collection_vr, collection_is_secret) = self.compile_node(iterable)?;
 
                         // Get the length of the collection: array_length(collection)
                         self.emit(Instruction::PUSHARG(collection_vr.0));
@@ -864,12 +863,12 @@ impl CodeGenerator {
             AstNode::FunctionDefinition {
                 name,
                 parameters,
-                return_type,
+                return_type: _,
                 body,
-                is_secret,
+                is_secret: _,
                 pragmas,
                 location,
-                node_id,
+                node_id: _,
             } => {
                 // --- Check for Pragmas ---
                 let mut skip_compilation = false;
@@ -899,7 +898,7 @@ impl CodeGenerator {
 
                 // --- Add parameters to the function_generator's symbol table ---
                 let mut param_vrs: Vec<VirtualRegister> = Vec::new();
-                for (i, param) in parameters.iter().enumerate() {
+                for param in parameters.iter() {
                     // Determine parameter secrecy from its type annotation
                     let param_type = param
                         .type_annotation
@@ -1024,7 +1023,7 @@ impl CodeGenerator {
                 Ok((VirtualRegister(usize::MAX), false)) // Return dummy VR
             }
             AstNode::ObjectDefinition {
-                name,
+                name: _,
                 base_type: _,
                 fields,
                 is_secret: _,
@@ -1097,7 +1096,7 @@ impl CodeGenerator {
             AstNode::IndexAccess {
                 base,
                 index,
-                location,
+                location: _,
             } => {
                 let (base_vr, base_is_secret) = self.compile_node(base)?;
                 let (index_vr, index_is_secret) = self.compile_node(index)?;
@@ -1275,20 +1274,18 @@ fn collect_upvalue_names(node: &AstNode) -> Vec<String> {
                     visit(statement, out);
                 }
             }
-            AstNode::VariableDeclaration { value, .. } => {
-                if let Some(value) = value {
-                    visit(value, out);
-                }
-            }
+            AstNode::VariableDeclaration {
+                value: Some(value), ..
+            } => visit(value, out),
+            AstNode::VariableDeclaration { value: None, .. } => {}
             AstNode::Assignment { target, value, .. } => {
                 visit(target, out);
                 visit(value, out);
             }
-            AstNode::Return { value, .. } => {
-                if let Some(value) = value {
-                    visit(value, out);
-                }
-            }
+            AstNode::Return {
+                value: Some(value), ..
+            } => visit(value, out),
+            AstNode::Return { value: None, .. } => {}
             AstNode::DiscardStatement { expression, .. } => visit(expression, out),
             AstNode::IfExpression {
                 condition,

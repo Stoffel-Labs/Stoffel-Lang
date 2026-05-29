@@ -340,16 +340,14 @@ pub enum SymbolDeclarationError {
 pub struct Scope {
     symbols: HashMap<String, SymbolInfo>,
     parent_scope_id: Option<usize>, // ID of the enclosing scope
-    scope_id: usize,
-    // pub children_scope_ids: Vec<usize>, // For debugging/visualization
+                                    // pub children_scope_ids: Vec<usize>, // For debugging/visualization
 }
 
 impl Scope {
-    fn new(scope_id: usize, parent_scope_id: Option<usize>) -> Self {
+    fn new(parent_scope_id: Option<usize>) -> Self {
         Scope {
             symbols: HashMap::new(),
             parent_scope_id,
-            scope_id,
             // children_scope_ids: Vec::new(),
         }
     }
@@ -388,6 +386,12 @@ pub struct SymbolTable {
     method_suggestions: HashMap<String, String>,
 }
 
+impl Default for SymbolTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymbolTable {
     pub fn new() -> Self {
         let mut table = SymbolTable {
@@ -399,7 +403,7 @@ impl SymbolTable {
             method_suggestions: HashMap::new(),
         };
         // Create the global scope (ID 0)
-        table.scopes.push(Scope::new(0, None));
+        table.scopes.push(Scope::new(None));
         table.add_builtins();
         table
     }
@@ -501,7 +505,7 @@ impl SymbolTable {
     pub fn enter_scope(&mut self) {
         let new_scope_id = self.next_scope_id;
         self.next_scope_id += 1;
-        let new_scope = Scope::new(new_scope_id, Some(self.current_scope_id));
+        let new_scope = Scope::new(Some(self.current_scope_id));
         self.scopes.push(new_scope);
         // Update parent's children list (if needed for debugging)
         // if let Some(parent_scope) = self.scopes.get_mut(self.current_scope_id) {
@@ -520,18 +524,6 @@ impl SymbolTable {
         self.current_scope_id = current_scope
             .parent_scope_id
             .expect("Cannot exit the global scope");
-    }
-
-    /// Sets the current scope ID. Used for switching contexts during analysis.
-    /// Panics if the provided ID is invalid.
-    pub fn set_current_scope(&mut self, scope_id: usize) {
-        if scope_id >= self.scopes.len() {
-            panic!(
-                "Internal error: Attempted to set invalid scope ID {}",
-                scope_id
-            );
-        }
-        self.current_scope_id = scope_id;
     }
 
     /// Declares a symbol in the current scope.
@@ -562,11 +554,6 @@ impl SymbolTable {
         None // Not found in any scope
     }
 
-    /// Gets the current scope's ID.
-    pub fn current_scope_id(&self) -> usize {
-        self.current_scope_id
-    }
-
     /// Returns all visible symbol names from current scope up the chain.
     /// Handles shadowing (inner scope symbols take precedence over outer).
     pub fn get_visible_symbol_names(&self) -> Vec<String> {
@@ -576,7 +563,7 @@ impl SymbolTable {
 
         while let Some(id) = scope_id {
             let scope = &self.scopes[id];
-            for (name, _) in &scope.symbols {
+            for name in scope.symbols.keys() {
                 if !seen.contains(name) {
                     seen.insert(name.clone());
                     symbols.push(name.clone());

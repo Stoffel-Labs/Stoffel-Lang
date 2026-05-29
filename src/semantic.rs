@@ -14,18 +14,19 @@ pub struct SemanticAnalyzer<'a> {
     symbol_table: SymbolTable,
     error_reporter: &'a mut ErrorReporter,
     current_function_return_type: Option<SymbolType>, // Track expected return type
-    filename: &'a str,
     /// Imported symbols from other modules, keyed by their qualified name
     imported_symbols: HashMap<String, SymbolInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemanticError;
+
 impl<'a> SemanticAnalyzer<'a> {
-    pub fn new(error_reporter: &'a mut ErrorReporter, filename: &'a str) -> Self {
+    pub fn new(error_reporter: &'a mut ErrorReporter, _filename: &'a str) -> Self {
         SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
             error_reporter,
             current_function_return_type: None,
-            filename,
             imported_symbols: HashMap::new(),
         }
     }
@@ -33,14 +34,13 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Creates a new analyzer with pre-populated imported symbols.
     pub fn with_imports(
         error_reporter: &'a mut ErrorReporter,
-        filename: &'a str,
+        _filename: &'a str,
         imported_symbols: HashMap<String, SymbolInfo>,
     ) -> Self {
         SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
             error_reporter,
             current_function_return_type: None,
-            filename,
             imported_symbols,
         }
     }
@@ -178,12 +178,12 @@ impl<'a> SemanticAnalyzer<'a> {
 
     /// Performs semantic analysis (declaration and resolution passes).
     /// Returns the potentially annotated AST or errors.
-    pub fn analyze(&mut self, node: AstNode) -> Result<AstNode, ()> {
+    pub fn analyze(&mut self, node: AstNode) -> Result<AstNode, SemanticError> {
         // Register any imported symbols before analysis
         self.register_imported_symbols();
 
         // Perform the combined analysis traversal
-        let (analyzed_node, _node_type) = self.analyze_node(node)?;
+        let (analyzed_node, _node_type) = self.analyze_node(node).map_err(|_| SemanticError)?;
         if !self.symbol_table.errors.is_empty() {
             for (error, location) in &self.symbol_table.errors {
                 match error {
@@ -204,286 +204,14 @@ impl<'a> SemanticAnalyzer<'a> {
                     } // Handle other symbol table errors if added later
                 }
             }
-            return Err(()); // Stop if declaration errors occurred
+            return Err(SemanticError); // Stop if declaration errors occurred
         }
 
         if self.error_reporter.has_errors() {
-            Err(())
+            Err(SemanticError)
         } else {
             Ok(analyzed_node) // Return the analyzed node
         }
-    }
-
-    fn populate_symbols(&mut self, node: &AstNode) -> Result<(), ()> {
-        match node {
-            AstNode::Block(statements) => {
-                // Blocks can sometimes introduce scopes, but let's handle that
-                // explicitly in constructs like functions or loops if needed.
-                // For a simple block, just traverse statements.
-                for stmt in statements {
-                    self.populate_symbols(stmt)?;
-                }
-            }
-            AstNode::VariableDeclaration {
-                name,
-                type_annotation,
-                value,
-                is_mutable,
-                is_secret,
-                location,
-            } => {
-                // Determine type (infer if necessary, check consistency)
-                // This is simplified; proper type inference is complex.
-                let mut declared_type = type_annotation
-                    .as_ref()
-                    .map(|tn| SymbolType::from_ast(tn))
-                    .unwrap_or(SymbolType::Unknown);
-
-                // TODO: Infer type from 'value' if type_annotation is None
-                // TODO: Check if inferred type matches annotation if both exist
-
-                // Handle 'secret' keyword on the type annotation itself
-                let final_type = if declared_type.is_secret() || *is_secret {
-                    declared_type.with_secret_modifier()
-                } else {
-                    declared_type // Use the original declared_type (no need to clone yet)
-                };
-
-                // Calculate secrecy *before* moving final_type
-                let calculated_is_secret = final_type.is_secret();
-
-                let info = SymbolInfo {
-                    name: name.clone(),
-                    kind: SymbolKind::Variable {
-                        is_mutable: *is_mutable,
-                    },
-                    symbol_type: final_type, // final_type is moved here
-                    is_secret: *is_secret || calculated_is_secret, // Use the pre-calculated flag
-                    defined_at: location.clone(),
-                };
-                self.symbol_table.declare_symbol(info);
-            }
-            AstNode::FunctionDefinition {
-                name,
-                parameters,
-                return_type,
-                body,
-                is_secret,
-                pragmas,
-                location,
-                node_id,
-            } => {
-                // Entry constraints: disallow secret entry functions.
-                // We cannot directly detect the header keyword here, but we enforce that
-                // no function used as entry (pragmas include 'entry') is secret.
-                let is_entry = pragmas
-                    .iter()
-                    .any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
-                if is_entry && *is_secret {
-                    self.error_reporter.add_error(CompilerError::semantic_error(
-                        "Entry function cannot be declared 'secret'",
-                        location.clone(),
-                    ));
-                    return Err(());
-                }
-
-                // Disallow 'secret' main explicitly at semantic level (parser doesn't allow 'secret main' keyword).
-                if let Some(n) = name {
-                    if n == "main" && *is_secret {
-                        self.error_reporter.add_error(CompilerError::semantic_error(
-                            "The 'main' entry function cannot be secret",
-                            location.clone(),
-                        ));
-                        return Err(());
-                    }
-                }
-
-                let func_name = name.as_ref().cloned().unwrap_or_else(|| {
-                    // TODO: Handle anonymous functions if needed
-                    format!("<anonymous_{}:{}>", location.line, location.column)
-                });
-
-                // Determine parameter types and return type for the symbol table entry
-                let param_types: Vec<SymbolType> = parameters
-                    .iter()
-                    .map(|p| {
-                        p.type_annotation
-                            .as_ref()
-                            .map(|tn| SymbolType::from_ast(tn))
-                            .unwrap_or(SymbolType::Unknown) // Infer or error later if needed
-                    })
-                    .collect();
-
-                let ret_type = return_type
-                    .as_ref()
-                    .map(|rt| SymbolType::from_ast(rt))
-                    .unwrap_or(SymbolType::Void); // Default return type is Void (also for '-> nil')
-
-                // Handle 'secret proc' and secret return type annotation
-                let final_return_type = if ret_type.is_secret() || *is_secret {
-                    ret_type.with_secret_modifier()
-                } else {
-                    ret_type
-                };
-
-                let mut is_builtin = false;
-                for pragma in pragmas {
-                    if let Pragma::Simple(pragma_name, _) = pragma {
-                        if pragma_name == "builtin" {
-                            is_builtin = true;
-                            break;
-                        }
-                    }
-                }
-
-                let info = SymbolInfo {
-                    name: func_name.clone(),
-                    kind: SymbolKind::Function {
-                        parameters: param_types.clone(), // Store types for call checking
-                        return_type: final_return_type.clone(),
-                    },
-                    symbol_type: final_return_type.clone(), // Type of the symbol is its return type
-                    is_secret: *is_secret || final_return_type.is_secret(),
-                    defined_at: location.clone(),
-                };
-
-                // Declare the function symbol ONLY if it's NOT a builtin
-                if !is_builtin {
-                    self.symbol_table.declare_symbol(info);
-                }
-
-                // --- Analyze function body in a new scope ---
-                if !is_builtin {
-                    // Also skip body analysis for builtins
-                    let original_scope_id = self.symbol_table.current_scope_id(); // Should be outer scope
-                    self.symbol_table.enter_scope();
-                    // Declare parameters within the function's scope
-                    for (param, param_type) in parameters.iter().zip(param_types.iter()) {
-                        let param_info = SymbolInfo {
-                            name: param.name.clone(),
-                            kind: SymbolKind::Variable { is_mutable: false }, // Params are immutable bindings
-                            symbol_type: param_type.clone(),
-                            is_secret: param_type.is_secret(), // Secrecy from type annotation
-                            defined_at: param
-                                .type_annotation
-                                .as_ref()
-                                .map_or_else(|| location.clone(), |n| n.location()), // Approx location
-                        };
-                        self.symbol_table.declare_symbol(param_info);
-                    }
-
-                    // Recursively populate symbols within the function body
-                    self.populate_symbols(body)?;
-
-                    self.symbol_table.exit_scope();
-                }
-            }
-            AstNode::IfExpression {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.populate_symbols(condition)?;
-                self.populate_symbols(then_branch)?;
-                if let Some(eb) = else_branch {
-                    self.populate_symbols(eb)?;
-                }
-            }
-            AstNode::WhileLoop {
-                condition, body, ..
-            } => {
-                self.populate_symbols(condition)?;
-                self.populate_symbols(body)?;
-            }
-            AstNode::ForLoop {
-                variables,
-                iterable,
-                body,
-                location: _,
-            } => {
-                // For-loops introduce a new scope for loop variables
-                // 1. Traverse the iterable expression
-                self.populate_symbols(iterable)?;
-                // 2. Enter loop scope and declare loop variables
-                //    Use Unknown type here - actual type is inferred during analyze_node
-                self.symbol_table.enter_scope();
-                for var_name in variables {
-                    let info = SymbolInfo {
-                        name: var_name.clone(),
-                        kind: SymbolKind::Variable { is_mutable: false },
-                        symbol_type: SymbolType::Unknown,
-                        is_secret: false,
-                        defined_at: node.location(),
-                    };
-                    self.symbol_table.declare_symbol(info);
-                }
-                // 3. Traverse the loop body
-                self.populate_symbols(body)?;
-                // 4. Exit loop scope
-                self.symbol_table.exit_scope();
-            }
-            AstNode::Assignment { target, value, .. } => {
-                // Assignments don't declare new symbols, but we need to traverse
-                // in case the value expression contains declarations (e.g., lambda)
-                self.populate_symbols(target)?; // Target might be complex (field access)
-                self.populate_symbols(value)?;
-            }
-            AstNode::Return {
-                value: Some(expr), ..
-            } => self.populate_symbols(expr)?,
-            AstNode::DiscardStatement { expression, .. } => self.populate_symbols(expression)?,
-            AstNode::FunctionCall {
-                function,
-                arguments,
-                ..
-            } => {
-                self.populate_symbols(function)?;
-                for arg in arguments {
-                    self.populate_symbols(arg)?;
-                }
-            }
-            AstNode::BinaryOperation { left, right, .. } => {
-                self.populate_symbols(left)?;
-                self.populate_symbols(right)?;
-            }
-            AstNode::UnaryOperation { operand, .. } => {
-                self.populate_symbols(operand)?;
-            }
-            AstNode::FieldAccess { object, .. } => {
-                self.populate_symbols(object)?;
-            }
-            AstNode::IndexAccess { base, index, .. } => {
-                self.populate_symbols(base)?;
-                self.populate_symbols(index)?;
-            }
-            AstNode::ListLiteral(elements) => {
-                for elem in elements {
-                    self.populate_symbols(elem)?;
-                }
-            }
-            AstNode::DictLiteral(pairs) => {
-                for (key, value) in pairs {
-                    self.populate_symbols(key)?;
-                    self.populate_symbols(value)?;
-                }
-            }
-            // Other nodes that might contain declarations (Types, Imports, etc.)
-            // AstNode::TypeAlias { .. } => { /* Declare type name */ }
-            // AstNode::ObjectDefinition { .. } => { /* Declare type name, enter scope for fields */ }
-            // AstNode::EnumDefinition { .. } => { /* Declare type name and enum members */ }
-            // AstNode::Import { .. } => { /* Add imported symbols */ }
-
-            // Leaf nodes and expressions that don't declare things
-            AstNode::Literal(_)
-            | AstNode::Identifier(_, _)
-            | AstNode::Return { value: None, .. } => {}
-            // Add other node types as needed
-            _ => {
-                // Optionally print a warning for unhandled node types during population
-                // eprintln!("Warning: Unhandled AST node type in populate_symbols: {:?}", node.kind());
-            }
-        }
-        Ok(())
     }
 
     /// Recursively analyzes a node, handling symbol declaration, resolution, and type checking.
@@ -666,7 +394,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         AstNode::Assignment {
                             target: Box::new(checked_target),
                             value: Box::new(checked_value),
-                            location: location,
+                            location,
                         },
                         SymbolType::Void,
                     ))
@@ -676,7 +404,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         AstNode::Assignment {
                             target: Box::new(checked_target),
                             value: Box::new(checked_value),
-                            location: location,
+                            location,
                         },
                         SymbolType::Void,
                     ))
@@ -714,8 +442,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
 
                 // 3. Check for type consistency (with integer width/range rules)
-                if type_annotation.is_some() && value_type != SymbolType::Unknown {
-                    if self
+                if type_annotation.is_some()
+                    && value_type != SymbolType::Unknown
+                    && self
                         .check_integer_compat(
                             checked_value_node.as_deref(),
                             &value_type,
@@ -723,9 +452,8 @@ impl<'a> SemanticAnalyzer<'a> {
                             location.clone(),
                         )
                         .is_err()
-                    {
-                        return Err(());
-                    }
+                {
+                    return Err(());
                 }
 
                 // 4. Handle 'secret' keyword and type secrecy
@@ -739,9 +467,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 // 5. Declare the symbol in the current scope
                 let info = SymbolInfo {
                     name: name.clone(),
-                    kind: SymbolKind::Variable {
-                        is_mutable: is_mutable,
-                    },
+                    kind: SymbolKind::Variable { is_mutable },
                     symbol_type: final_type,
                     is_secret: is_secret || calculated_is_secret,
                     defined_at: location.clone(),
@@ -1290,7 +1016,7 @@ impl<'a> SemanticAnalyzer<'a> {
                                     loc.clone(),
                                 );
                                 if let Some(suggestion) =
-                                    suggest_function_from_symbols(&name, &self.symbol_table)
+                                    suggest_function_from_symbols(name, &self.symbol_table)
                                 {
                                     error =
                                         error.with_hint(format!("Did you mean '{}'?", suggestion));
@@ -1338,7 +1064,7 @@ impl<'a> SemanticAnalyzer<'a> {
                                         }
                                     }
                                 } else if let Some(suggestion) =
-                                    suggest_method_to_function(&field_name, &self.symbol_table)
+                                    suggest_method_to_function(field_name, &self.symbol_table)
                                 {
                                     self.error_reporter.add_error(
                                         CompilerError::semantic_error(
@@ -1358,7 +1084,7 @@ impl<'a> SemanticAnalyzer<'a> {
                             } else {
                                 // Object is not a simple identifier — unsupported method call
                                 if let Some(suggestion) =
-                                    suggest_method_to_function(&field_name, &self.symbol_table)
+                                    suggest_method_to_function(field_name, &self.symbol_table)
                                 {
                                     self.error_reporter.add_error(
                                         CompilerError::semantic_error(
@@ -1438,10 +1164,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 command,
                 arguments,
                 location,
-                resolved_return_type,
+                resolved_return_type: _,
             } => {
                 // 1. Analyze the command expression (usually an identifier)
-                let (checked_command_node, command_expr_type) = self.analyze_node(*command)?;
+                let (checked_command_node, _command_expr_type) = self.analyze_node(*command)?;
 
                 // 2. Analyze arguments
                 let mut checked_arguments = Vec::with_capacity(arguments.len());
@@ -1463,7 +1189,7 @@ impl<'a> SemanticAnalyzer<'a> {
                                 loc.clone(),
                             );
                             if let Some(suggestion) =
-                                suggest_function_from_symbols(&name, &self.symbol_table)
+                                suggest_function_from_symbols(name, &self.symbol_table)
                             {
                                 error = error.with_hint(format!("Did you mean '{}'?", suggestion));
                             }
@@ -1558,10 +1284,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     let is_same_clear_comparable = l_under == r_under
                         && matches!(l_under, SymbolType::Bool | SymbolType::String);
 
-                    if !(is_left_numeric && is_right_numeric)
+                    if (!is_left_numeric || !is_right_numeric)
                         && !is_same_clear_comparable
-                        && !(matches!(l_under, SymbolType::Unknown)
-                            || matches!(r_under, SymbolType::Unknown))
+                        && !matches!(l_under, SymbolType::Unknown)
+                        && !matches!(r_under, SymbolType::Unknown)
                     {
                         // If both are known and not numeric, error out
                         let err_loc = match (&checked_left, &checked_right) {
@@ -1702,7 +1428,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 location,
             } => {
                 let (checked_base, base_type) = self.analyze_node(*base)?;
-                let (checked_index, index_type) = self.analyze_node(*index)?;
+                let (checked_index, _index_type) = self.analyze_node(*index)?;
 
                 // Determine element type based on base type
                 let element_type = match base_type.underlying_type() {
@@ -1911,8 +1637,7 @@ fn declared_type_to_string(sym_type: &SymbolType) -> String {
         ),
         SymbolType::Object(name) => name.clone(),
         SymbolType::Generic(name, params) => {
-            let params_str: Vec<String> =
-                params.iter().map(|p| declared_type_to_string(p)).collect();
+            let params_str: Vec<String> = params.iter().map(declared_type_to_string).collect();
             format!("{}[{}]", name, params_str.join(", "))
         }
     }
@@ -1923,7 +1648,7 @@ pub fn analyze(
     ast: AstNode,
     error_reporter: &mut ErrorReporter,
     filename: &str,
-) -> Result<AstNode, ()> {
+) -> Result<AstNode, SemanticError> {
     let mut analyzer = SemanticAnalyzer::new(error_reporter, filename);
     analyzer.analyze(ast)
 }
@@ -1934,7 +1659,7 @@ pub fn analyze_with_imports(
     error_reporter: &mut ErrorReporter,
     filename: &str,
     imported_symbols: HashMap<String, SymbolInfo>,
-) -> Result<AstNode, ()> {
+) -> Result<AstNode, SemanticError> {
     let mut analyzer = SemanticAnalyzer::with_imports(error_reporter, filename, imported_symbols);
     analyzer.analyze(ast)
 }

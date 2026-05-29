@@ -3,28 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::Parser as ClapParser; // Alias to avoid name clash with our parser module
+use stoffellang::{binary_converter, bytecode, compiler, core_types, errors};
 
 const SRC_EXT: &str = "stfl";
 const BIN_EXT: &str = "stflb";
-
-mod ast;
-mod binary_converter;
-mod builtin_registry;
-mod bytecode;
-mod codegen;
-mod compiler;
-mod core_types;
-mod errors;
-mod lexer;
-mod module_resolver;
-mod multi_file_compiler;
-mod optimizations;
-mod parser;
-mod register_allocator;
-mod semantic;
-mod suggestions;
-mod symbol_table;
-mod ufcs;
 
 /// Stoffel Language Compiler
 #[derive(ClapParser, Debug)]
@@ -64,10 +46,10 @@ struct CliArgs {
 
 fn dedupe_constants_for_display(constants: &[bytecode::Constant]) -> Vec<bytecode::Constant> {
     use std::collections::HashSet;
-    let mut seen: HashSet<crate::core_types::Value> = HashSet::new();
+    let mut seen: HashSet<core_types::Value> = HashSet::new();
     let mut out = Vec::with_capacity(constants.len());
     for c in constants.iter().cloned() {
-        let v: crate::core_types::Value = crate::core_types::Value::from(c.clone());
+        let v = core_types::Value::from(c.clone());
         if seen.insert(v) {
             out.push(c);
         }
@@ -141,7 +123,7 @@ fn main() {
     };
 
     let file_path = Path::new(filename);
-    let file_name = file_path
+    let _file_name = file_path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
@@ -240,7 +222,7 @@ fn main() {
                 let mut error_with_snippet = error.clone();
                 // Generate the snippet using the actual source code
                 let snippet_str = errors::extract_source_snippet(&source, &error.location, 2);
-                error_with_snippet.source_snippet = Some(snippet_str);
+                error_with_snippet.source_snippet = Some(snippet_str.into_boxed_str());
                 // Print the error using the enhanced formatter
                 eprintln!("{}", error_with_snippet.format_with_colors());
             }

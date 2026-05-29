@@ -9,7 +9,6 @@ use crate::lexer::{TokenInfo, TokenKind};
 struct Parser<'a> {
     tokens: Peekable<Iter<'a, TokenInfo>>,
     current_token_info: Option<&'a TokenInfo>, // Store the current token info
-    filename: String,
     last_location: SourceLocation,
     node_id_counter: usize, // Counter for assigning unique node IDs
 }
@@ -21,7 +20,6 @@ impl<'a> Parser<'a> {
         Parser {
             tokens: iter,
             current_token_info: current,
-            filename: filename.to_string(),
             last_location: SourceLocation {
                 file: filename.to_string(),
                 line: 1,
@@ -40,11 +38,6 @@ impl<'a> Parser<'a> {
         }
         self.current_token_info = self.tokens.next();
         consumed
-    }
-
-    // Peeks at the next token without consuming the current one.
-    fn peek(&mut self) -> Option<&&'a TokenInfo> {
-        self.tokens.peek()
     }
 
     // Checks if the current token matches the expected kind.
@@ -750,7 +743,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if_statement_or_expression(&mut self) -> CompilerResult<AstNode> {
-        let start_location = self.get_location(); // Location of 'if'
+        let _start_location = self.get_location(); // Location of 'if'
         self.consume_keyword("if", "Expected 'if'")?;
         let condition = self.parse_expression()?;
         self.consume(&TokenKind::Colon, "Expected ':' after if condition")?;

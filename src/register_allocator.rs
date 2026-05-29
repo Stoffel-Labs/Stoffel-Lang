@@ -87,8 +87,8 @@ pub fn analyze_liveness_with_liveins(
 
         // Process definitions (update defined, initialize interval)
         for vr in instruction.defs() {
-            if !defined.contains_key(&vr) {
-                defined.insert(vr, instruction_index);
+            if let std::collections::hash_map::Entry::Vacant(e) = defined.entry(vr) {
+                e.insert(instruction_index);
                 update_start(&mut intervals, vr, instruction_index);
             }
             // Definition also counts as a use for liveness purposes
@@ -155,17 +155,17 @@ pub fn analyze_liveness_cfg_with_liveins(
             block_starts.insert(idx);
         }
     }
-    for i in 0..n {
-        match &instructions[i] {
+    for (i, instruction) in instructions.iter().enumerate() {
+        match instruction {
             Instruction::JMP(_)
             | Instruction::JMPEQ(_)
             | Instruction::JMPNEQ(_)
             | Instruction::JMPLT(_)
             | Instruction::JMPGT(_)
-            | Instruction::RET(_) => {
-                if i + 1 < n {
-                    block_starts.insert(i + 1);
-                }
+            | Instruction::RET(_)
+                if i + 1 < n =>
+            {
+                block_starts.insert(i + 1);
             }
             _ => {}
         }
@@ -177,8 +177,8 @@ pub fn analyze_liveness_cfg_with_liveins(
     let mut inst2block: Vec<usize> = vec![0; n];
     for (bi, &s) in starts.iter().enumerate() {
         let end = starts.get(bi + 1).copied().unwrap_or(n);
-        for i in s..end {
-            inst2block[i] = bi;
+        for block_id in inst2block.iter_mut().take(end).skip(s) {
+            *block_id = bi;
         }
     }
 
@@ -208,15 +208,15 @@ pub fn analyze_liveness_cfg_with_liveins(
             .get(lbl)
             .and_then(|&idx| if idx < n { Some(inst2block[idx]) } else { None })
     };
-    for bi in 0..blocks.len() {
-        if blocks[bi].start == blocks[bi].end {
+    for (bi, block) in blocks.iter_mut().enumerate() {
+        if block.start == block.end {
             continue;
         }
-        let last_i = blocks[bi].end - 1;
+        let last_i = block.end - 1;
         match &instructions[last_i] {
             Instruction::JMP(lbl) => {
                 if let Some(t) = label_to_block(lbl) {
-                    blocks[bi].succs.push(t);
+                    block.succs.push(t);
                 }
             }
             Instruction::JMPEQ(lbl)
@@ -224,12 +224,12 @@ pub fn analyze_liveness_cfg_with_liveins(
             | Instruction::JMPLT(lbl)
             | Instruction::JMPGT(lbl) => {
                 if let Some(t) = label_to_block(lbl) {
-                    blocks[bi].succs.push(t);
+                    block.succs.push(t);
                 }
                 // fallthrough
                 if let Some(next_start) = starts.get(bi + 1).copied() {
                     if next_start < n {
-                        blocks[bi].succs.push(bi + 1);
+                        block.succs.push(bi + 1);
                     }
                 }
             }
@@ -237,20 +237,18 @@ pub fn analyze_liveness_cfg_with_liveins(
             _ => {
                 // fallthrough
                 if let Some(_next) = starts.get(bi + 1) {
-                    blocks[bi].succs.push(bi + 1);
+                    block.succs.push(bi + 1);
                 }
             }
         }
         // Dedup succs
         let mut uniq = HashSet::new();
-        blocks[bi].succs.retain(|s| uniq.insert(*s));
+        block.succs.retain(|s| uniq.insert(*s));
     }
 
     // 3) Compute use/def per block
-    for bi in 0..blocks.len() {
-        let b = &mut blocks[bi];
-        for i in b.start..b.end {
-            let inst = &instructions[i];
+    for b in &mut blocks {
+        for inst in instructions.iter().take(b.end).skip(b.start) {
             // uses
             for u in inst.uses() {
                 if !b.def_set.contains(&u) {
@@ -312,10 +310,10 @@ pub fn analyze_liveness_cfg_with_liveins(
     let mut live_in_inst: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); n];
     let mut live_out_inst: Vec<HashSet<VirtualRegister>> = vec![HashSet::new(); n];
 
-    for bi in 0..blocks.len() {
+    for (bi, block) in blocks.iter().enumerate() {
         let mut live: HashSet<VirtualRegister> = live_out_b[bi].clone();
         // Walk backwards within block
-        for i in (blocks[bi].start..blocks[bi].end).rev() {
+        for i in (block.start..block.end).rev() {
             // out at i
             live_out_inst[i] = live.clone();
             // in at i = (out - defs) ∪ uses
@@ -334,8 +332,8 @@ pub fn analyze_liveness_cfg_with_liveins(
 
     // 6) Build intervals
     let mut def_first: HashMap<VirtualRegister, usize> = HashMap::new();
-    for i in 0..n {
-        for d in instructions[i].defs() {
+    for (i, instruction) in instructions.iter().enumerate() {
+        for d in instruction.defs() {
             def_first
                 .entry(d)
                 .and_modify(|e| {
@@ -353,11 +351,8 @@ pub fn analyze_liveness_cfg_with_liveins(
         let mut start = def_first.get(&vr).copied().unwrap_or(usize::MAX);
         // If live before any instruction, find earliest index where live_in is true
         if start == usize::MAX {
-            for i in 0..n {
-                if live_in_inst[i].contains(&vr) {
-                    start = i;
-                    break;
-                }
+            if let Some(i) = live_in_inst.iter().position(|live| live.contains(&vr)) {
+                start = i;
             }
         }
         if start == usize::MAX {
@@ -365,8 +360,8 @@ pub fn analyze_liveness_cfg_with_liveins(
         }
         // end = last i where live_out[i] contains vr => i+1
         let mut end = 0usize;
-        for i in 0..n {
-            if live_out_inst[i].contains(&vr) {
+        for (i, live) in live_out_inst.iter().enumerate() {
+            if live.contains(&vr) {
                 end = i + 1;
             }
         }

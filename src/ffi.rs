@@ -138,7 +138,7 @@ unsafe fn rust_errors_to_c(errors: Vec<CompilerError>) -> CCompilerErrors {
                 crate::errors::ErrorCategory::Semantic => 2,
                 crate::errors::ErrorCategory::Internal => 3,
             },
-            code: string_to_c_char(&error.code),
+            code: string_to_c_char(error.code),
             hint: if let Some(hint) = &error.hint {
                 string_to_c_char(hint)
             } else {
@@ -316,7 +316,7 @@ unsafe fn instruction_to_c(
             operand2: *offset as usize,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::LDI(reg, value) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::LDI(reg, _value) => CInstruction {
             opcode: 1,
             operand1: *reg,
             operand2: 0,
@@ -394,37 +394,37 @@ unsafe fn instruction_to_c(
             operand2: *src,
             operand3: *amount,
         },
-        stoffel_vm_types::instructions::Instruction::JMP(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMP(_label) => CInstruction {
             opcode: 14,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPEQ(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPEQ(_label) => CInstruction {
             opcode: 15,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPNEQ(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPNEQ(_label) => CInstruction {
             opcode: 16,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPLT(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPLT(_label) => CInstruction {
             opcode: 17,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPGT(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPGT(_label) => CInstruction {
             opcode: 18,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::CALL(function) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::CALL(_function) => CInstruction {
             opcode: 19,
             operand1: 0,
             operand2: 0,
@@ -507,6 +507,13 @@ unsafe fn compiled_program_to_c(program: CompiledProgram) -> *mut CCompiledProgr
 }
 
 #[no_mangle]
+/// Compile Stoffel source code through the C ABI.
+///
+/// # Safety
+///
+/// `source` and `filename` must be valid, null-terminated C strings. `options` may be null or
+/// point to a valid `CCompilerOptions`. The returned pointer must be released with
+/// `stoffel_free_compilation_result`.
 pub unsafe extern "C" fn stoffel_compile(
     source: *const c_char,
     filename: *const c_char,
@@ -554,6 +561,12 @@ pub unsafe extern "C" fn stoffel_compile(
 }
 
 #[no_mangle]
+/// Free a compilation result returned by `stoffel_compile`.
+///
+/// # Safety
+///
+/// `result` must be null or a pointer returned by `stoffel_compile` that has not already been
+/// freed.
 pub unsafe extern "C" fn stoffel_free_compilation_result(result: *mut CCompilationResult) {
     if result.is_null() {
         return;
@@ -569,6 +582,11 @@ pub unsafe extern "C" fn stoffel_free_compilation_result(result: *mut CCompilati
 }
 
 #[no_mangle]
+/// Free a compiled program allocated by this library.
+///
+/// # Safety
+///
+/// `program` must be null or a pointer allocated by this library that has not already been freed.
 pub unsafe extern "C" fn stoffel_free_compiled_program(program: *mut CCompiledProgram) {
     if program.is_null() {
         return;
@@ -595,6 +613,11 @@ pub unsafe extern "C" fn stoffel_free_compiled_program(program: *mut CCompiledPr
 }
 
 #[no_mangle]
+/// Free a bytecode chunk allocated by this library.
+///
+/// # Safety
+///
+/// `chunk` must be null or point to a `CBytecodeChunk` allocated by this library.
 pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChunk) {
     if chunk.is_null() {
         return;
@@ -623,6 +646,11 @@ pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChun
 }
 
 #[no_mangle]
+/// Free compiler errors allocated by this library.
+///
+/// # Safety
+///
+/// `errors` must be null or point to a `CCompilerErrors` value allocated by this library.
 pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerErrors) {
     if errors.is_null() {
         return;
@@ -651,6 +679,11 @@ pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerEr
 }
 
 #[no_mangle]
+/// Return the compiler version as a static C string.
+///
+/// # Safety
+///
+/// The returned pointer is static and must not be freed.
 pub unsafe extern "C" fn stoffel_get_version() -> *const c_char {
-    "0.1.0\0".as_ptr() as *const c_char
+    c"0.1.0".as_ptr()
 }

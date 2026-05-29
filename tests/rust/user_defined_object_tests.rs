@@ -52,16 +52,6 @@ fn compile_to_bytecode(
         .map_err(|errors| errors.iter().map(|e| e.message.clone()).collect())
 }
 
-/// Expects a compile error containing the given substring
-fn expect_compile_error(source: &str, expected_error: &str) -> bool {
-    match compile_source(source) {
-        Err(errors) => errors
-            .iter()
-            .any(|e| e.to_lowercase().contains(&expected_error.to_lowercase())),
-        Ok(_) => false,
-    }
-}
-
 /// Expects a parse error containing the given substring
 fn expect_parse_error(source: &str, expected_error: &str) -> bool {
     match parse_source(source) {

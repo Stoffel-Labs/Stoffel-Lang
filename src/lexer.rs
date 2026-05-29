@@ -298,7 +298,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     push_token(TokenKind::RPragma, make_location(line, column));
                     column += 2; // Account for both '.' and '}'
                                  // --- Check for float literal starting with '.' ---
-                } else if iter.peek().map_or(false, |ch| ch.is_ascii_digit()) {
+                } else if iter.peek().is_some_and(|ch| ch.is_ascii_digit()) {
                     // Likely start of a float like .5
                     let mut num_str = "0.".to_string(); // Prepend 0
                     column += 1; // Account for the initial '.'
@@ -440,7 +440,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 }
 
                 // Helper to check valid digit for radix
-                let mut is_valid_digit = |ch: char| -> bool {
+                let is_valid_digit = |ch: char| -> bool {
                     match radix {
                         2 => ch == '0' || ch == '1',
                         8 => ch.is_ascii_digit() && ch <= '7',
@@ -463,7 +463,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         // Check not '..' and that a digit follows
                         let mut peek_ahead = iter.clone();
                         peek_ahead.next();
-                        if peek_ahead.peek().map_or(false, |ch| ch.is_ascii_digit()) {
+                        if peek_ahead.peek().is_some_and(|ch| ch.is_ascii_digit()) {
                             is_float = true;
                             digits.push('.');
                             iter.next();

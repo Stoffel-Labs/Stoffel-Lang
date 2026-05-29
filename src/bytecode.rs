@@ -40,6 +40,7 @@ pub enum Constant {
 }
 
 #[repr(u8)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ReducedOpcode {
     // NOP
     NOP = 0x17,
@@ -111,6 +112,7 @@ pub enum Operand {
 /// This representation is generated from the symbolic `Instruction` enum during function
 /// registration and is used by the VM's execution engine.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ResolvedInstruction {
     // No operation
     NOP,

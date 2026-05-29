@@ -247,7 +247,7 @@ impl AstNode {
             AstNode::ListLiteral(_) | AstNode::TupleLiteral(_) => true,
             AstNode::SetLiteral(_) | AstNode::DictLiteral(_) => true,
             AstNode::IfExpression { .. } => true,
-            AstNode::Block(nodes) => nodes.last().map_or(false, |n| n.is_expression()),
+            AstNode::Block(nodes) => nodes.last().is_some_and(|n| n.is_expression()),
             AstNode::Assignment { .. } | AstNode::VariableDeclaration { .. } => false,
             AstNode::WhileLoop { .. } | AstNode::ForLoop { .. } => false,
             AstNode::Return { .. } | AstNode::Yield(_) | AstNode::Break | AstNode::Continue => {
