@@ -18,11 +18,15 @@ impl<'a> Parser<'a> {
     fn new(tokens: &'a [TokenInfo], filename: &str) -> Self {
         let mut iter = tokens.iter().peekable();
         let current = iter.next();
-        Parser { 
-            tokens: iter, 
+        Parser {
+            tokens: iter,
             current_token_info: current,
             filename: filename.to_string(),
-            last_location: SourceLocation { file: filename.to_string(), line: 1, column: 1 },
+            last_location: SourceLocation {
+                file: filename.to_string(),
+                line: 1,
+                column: 1,
+            },
             node_id_counter: 0, // Initialize counter
         }
     }
@@ -51,14 +55,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-     // Checks if the current token is a specific keyword.
+    // Checks if the current token is a specific keyword.
     fn check_keyword(&self, keyword: &str) -> bool {
         matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) if k == keyword)
     }
 
     // --- Core token consumption helpers ---
     // Consumes the current token if it matches the expected kind, otherwise returns an error.
-    fn consume(&mut self, expected: &TokenKind, error_message: &str) -> CompilerResult<&'a TokenInfo> {
+    fn consume(
+        &mut self,
+        expected: &TokenKind,
+        error_message: &str,
+    ) -> CompilerResult<&'a TokenInfo> {
         if self.check(expected) {
             Ok(self.advance().unwrap()) // Safe unwrap because check succeeded
         } else {
@@ -68,31 +76,45 @@ impl<'a> Parser<'a> {
                 TokenKind::Operator(op) => format!("operator '{}'", op),
                 _ => format!("{:?}", expected),
             };
-            
+
             let (found_str, location) = match self.current_token_info {
                 Some(token) => (format!("{:?}", token), token.location.clone()),
                 None => ("end of file".to_string(), self.last_location.clone()),
             };
-            
-            Err(CompilerError::syntax_error(format!("{} Expected {}, found {}", error_message, expected_str, found_str), location)
-                .with_hint(format!("Try adding {} here", expected_str)))
+
+            Err(CompilerError::syntax_error(
+                format!(
+                    "{} Expected {}, found {}",
+                    error_message, expected_str, found_str
+                ),
+                location,
+            )
+            .with_hint(format!("Try adding {} here", expected_str)))
         }
     }
 
-     // Consumes the current token if it's a specific keyword, otherwise returns an error.
-    fn consume_keyword(&mut self, keyword: &str, error_message: &str) -> CompilerResult<&'a TokenInfo> {
+    // Consumes the current token if it's a specific keyword, otherwise returns an error.
+    fn consume_keyword(
+        &mut self,
+        keyword: &str,
+        error_message: &str,
+    ) -> CompilerResult<&'a TokenInfo> {
         if self.check_keyword(keyword) {
-             Ok(self.advance().unwrap()) // Safe unwrap because check succeeded
+            Ok(self.advance().unwrap()) // Safe unwrap because check succeeded
         } else {
-             let (found_str, location) = match self.current_token_info {
-                 Some(token) => (format!("{:?}", token), token.location.clone()),
-                 None => ("end of file".to_string(), self.last_location.clone()),
-             };
-             
-             Err(CompilerError::syntax_error(
-                 format!("{} Expected keyword '{}', found {}", error_message, keyword, found_str), 
-                 location
-             ).with_hint(format!("Try using the '{}' keyword here", keyword)))
+            let (found_str, location) = match self.current_token_info {
+                Some(token) => (format!("{:?}", token), token.location.clone()),
+                None => ("end of file".to_string(), self.last_location.clone()),
+            };
+
+            Err(CompilerError::syntax_error(
+                format!(
+                    "{} Expected keyword '{}', found {}",
+                    error_message, keyword, found_str
+                ),
+                location,
+            )
+            .with_hint(format!("Try using the '{}' keyword here", keyword)))
         }
     }
 
@@ -112,7 +134,10 @@ impl<'a> Parser<'a> {
     // Helper to parse an indented block of statements
     fn parse_indented_block(&mut self) -> CompilerResult<AstNode> {
         // Allow multiple newlines before the indented block starts
-        self.consume(&TokenKind::Newline, "Expected newline after ':' before indented block")?;
+        self.consume(
+            &TokenKind::Newline,
+            "Expected newline after ':' before indented block",
+        )?;
         while self.check(&TokenKind::Newline) {
             self.advance(); // Skip extra blank lines
         }
@@ -142,7 +167,8 @@ impl<'a> Parser<'a> {
         }
         // ---------------------------
         let mut statements = Vec::new();
-        while !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) { // Stop at EOF or Dedent
+        while !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+            // Stop at EOF or Dedent
             statements.push(self.parse_statement_or_declaration()?);
             // Skip optional newlines between statements
             while self.check(&TokenKind::Newline) {
@@ -151,9 +177,9 @@ impl<'a> Parser<'a> {
         }
         // If only one statement, return it directly, otherwise wrap in a block
         if statements.len() == 1 {
-             Ok(statements.pop().unwrap())
+            Ok(statements.pop().unwrap())
         } else {
-             Ok(AstNode::Block(statements))
+            Ok(AstNode::Block(statements))
         }
     }
 
@@ -161,13 +187,24 @@ impl<'a> Parser<'a> {
     fn parse_statement_or_declaration(&mut self) -> CompilerResult<AstNode> {
         // Look ahead to determine if it's a declaration (let, var, proc, type, etc.)
         match &self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
-                "var" => self.parse_variable_declaration(false), // Not secret by default
-                "def" => self.parse_function_definition(false),
-                "main" => self.parse_main_definition(), // special entry syntax
+            Some(TokenInfo {
+                kind: TokenKind::Keyword(k),
+                ..
+            }) => match k.as_str() {
+                "var" => self.parse_variable_declaration(),
+                "def" => self.parse_function_definition(),
+                "main" => Err(CompilerError::syntax_error(
+                    "The 'main <name>(...)' entry form is no longer supported",
+                    self.get_location(),
+                )
+                .with_hint("Use 'def main(...)' instead")),
                 "builtin" => self.parse_builtin_declaration(),
                 "type" | "object" | "enum" => self.parse_type_definition(),
-                "secret" => self.parse_secret_declaration(),
+                "secret" => Err(CompilerError::syntax_error(
+                    "The 'secret' descriptor is only valid in type annotations",
+                    self.get_location(),
+                )
+                .with_hint("Use forms like 'var x: secret int64', 'param: secret int64', or 'field: secret int64'")),
                 "if" => self.parse_if_statement_or_expression(),
                 "while" => self.parse_while_loop(),
                 "for" => self.parse_for_loop(),
@@ -178,18 +215,27 @@ impl<'a> Parser<'a> {
                 _ => self.parse_expression_statement(), // Assume expression if keyword doesn't start a known statement/decl
             },
             // Friendly hard error for legacy 'proc' at start of a declaration
-            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "proc" => {
-                Err(CompilerError::syntax_error(
-                    "The 'proc' keyword is no longer supported; use 'def'",
-                    location.clone(),
-                ).with_hint("Rewrite: def name(args) -> type:"))
-            }
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(id),
+                location,
+            }) if id == "proc" => Err(CompilerError::syntax_error(
+                "The 'proc' keyword is no longer supported; use 'def'",
+                location.clone(),
+            )
+            .with_hint("Rewrite: def name(args) -> type:")),
             // Special-case legacy 'let' at statement start to give a helpful error
-            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
-                Err(CompilerError::syntax_error("The 'let' keyword is no longer supported", location.clone())
-                    .with_hint("Use 'var' for variable declarations (e.g., 'var x = ...')"))
-            }
-            Some(TokenInfo { kind: TokenKind::Identifier(_), .. }) => self.parse_expression_statement(),
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(id),
+                location,
+            }) if id == "let" => Err(CompilerError::syntax_error(
+                "The 'let' keyword is no longer supported",
+                location.clone(),
+            )
+            .with_hint("Use 'var' for variable declarations (e.g., 'var x = ...')")),
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(_),
+                ..
+            }) => self.parse_expression_statement(),
             // Add cases for other statement starters
             _ => {
                 let (found_str, location) = match self.current_token_info {
@@ -197,63 +243,59 @@ impl<'a> Parser<'a> {
                     None => ("end of file".to_string(), self.last_location.clone()),
                 };
 
-                Err(CompilerError::syntax_error(format!("Unexpected token at start of statement/declaration: {}", found_str), location))
-            }
-        }
-    }
-
-    // Handles declarations starting with 'secret'
-    fn parse_secret_declaration(&mut self) -> CompilerResult<AstNode> {
-        self.consume_keyword("secret", "Expected 'secret'")?;
-        // Check what follows 'secret'
-        match &self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) => match k.as_str() {
-                "def" => self.parse_function_definition(true), // Pass is_secret=true
-                "var" => self.parse_variable_declaration(true), // Pass is_secret=true
-                "type" | "object" | "enum" => self.parse_type_definition_impl(true), // Pass is_secret=true
-                _ => Err(CompilerError::syntax_error(format!("Unexpected keyword '{}' after 'secret'", k), self.get_location())),
-            },
-            // Explicitly catch 'secret proc'
-            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "proc" => {
                 Err(CompilerError::syntax_error(
-                    "The 'proc' keyword is no longer supported; use 'def'",
-                    location.clone(),
-                ).with_hint("Rewrite: secret def name(args) -> type:"))
+                    format!(
+                        "Unexpected token at start of statement/declaration: {}",
+                        found_str
+                    ),
+                    location,
+                ))
             }
-            // Explicitly catch 'secret let'
-            Some(TokenInfo { kind: TokenKind::Identifier(id), location }) if id == "let" => {
-                Err(CompilerError::syntax_error("The 'secret let' form is no longer supported", location.clone())
-                    .with_hint("Use 'secret var' instead"))
-            }
-            _ => Err(CompilerError::syntax_error("Expected 'proc', 'var', 'type', 'object', or 'enum' after 'secret'", self.get_location())),
         }
     }
 
-    fn parse_function_definition(&mut self, is_secret: bool) -> CompilerResult<AstNode> {
+    fn parse_function_definition(&mut self) -> CompilerResult<AstNode> {
         let node_id = self.next_node_id(); // Get a unique ID for this function node
         let start_location = self.get_location(); // Location of 'def'
         self.consume_keyword("def", "Expected 'def'")?; // Consume 'def'
         let name = match self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Identifier(n), .. }) => {
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(n),
+                ..
+            }) => {
                 let name = n.clone();
                 self.advance();
                 name
             }
-            Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) if k == "type" || k == "main" => {
+            Some(TokenInfo {
+                kind: TokenKind::Keyword(k),
+                ..
+            }) if k == "type" || k == "main" => {
                 let name = k.clone();
                 self.advance();
                 name
             }
-            _ => return Err(CompilerError::syntax_error("Expected function name", self.get_location())),
+            _ => {
+                return Err(CompilerError::syntax_error(
+                    "Expected function name",
+                    self.get_location(),
+                ))
+            }
         };
 
         self.consume(&TokenKind::LParen, "Expected '(' after function name")?;
         let mut parameters = Vec::new();
         if !self.check(&TokenKind::RParen) {
             loop {
-                let param_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected parameter name")?;
+                let param_name_token = self.consume(
+                    &TokenKind::Identifier("".to_string()),
+                    "Expected parameter name",
+                )?;
                 let param_name = match param_name_token {
-                    TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+                    TokenInfo {
+                        kind: TokenKind::Identifier(n),
+                        ..
+                    } => n.clone(),
                     _ => unreachable!(), // consume ensures it's an identifier
                 };
 
@@ -261,8 +303,15 @@ impl<'a> Parser<'a> {
                 let param_type_annotation = if self.check(&TokenKind::Colon) {
                     self.advance(); // Consume ':'
                     Some(Box::new(self.parse_type_annotation()?))
-                } else { None };
-                parameters.push(Parameter { name: param_name, type_annotation: param_type_annotation, default_value: None, is_secret: false });
+                } else {
+                    None
+                };
+                parameters.push(Parameter {
+                    name: param_name,
+                    type_annotation: param_type_annotation,
+                    default_value: None,
+                    is_secret: false,
+                });
 
                 if self.check(&TokenKind::RParen) {
                     break;
@@ -275,7 +324,10 @@ impl<'a> Parser<'a> {
         // New syntax: optional '-> <type-or-nil>' before pragmas, then ':' to start body/header end
         let mut return_type: Option<Box<AstNode>> = None;
         if self.check(&TokenKind::Arrow) {
-            let arrow_location = self.current_token_info.map(|t| t.location.clone()).unwrap_or_default();
+            let arrow_location = self
+                .current_token_info
+                .map(|t| t.location.clone())
+                .unwrap_or_default();
             self.advance(); // consume '->'
 
             // Check for tuple return type syntax: -> (Type1, Type2)
@@ -288,7 +340,13 @@ impl<'a> Parser<'a> {
             }
 
             // Special-case: allow 'nil' to mean no return (void)
-            if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
+            if matches!(
+                self.current_token_info,
+                Some(TokenInfo {
+                    kind: TokenKind::NilLiteral,
+                    ..
+                })
+            ) {
                 // Treat as no return type
                 self.advance(); // consume 'nil'
                 return_type = None;
@@ -321,160 +379,70 @@ impl<'a> Parser<'a> {
             parameters,
             return_type,
             body: Box::new(body),
-            is_secret, // Pass the flag indicating if 'secret def' was used
-            pragmas, // Store parsed pragmas
+            is_secret: false,
+            pragmas,                  // Store parsed pragmas
             location: start_location, // Use location of 'def' keyword
-            node_id, // Store the unique ID
-        })
-    }
-
-    // Parse the special 'main' entry function definition.
-    // New syntax:
-    //   main <method_name>(<params>) [-> <type-or-nil>] [{. pragmas .}]:
-    //     <body>
-    fn parse_main_definition(&mut self) -> CompilerResult<AstNode> {
-        let node_id = self.next_node_id();
-        let start_location = self.get_location(); // location of 'main'
-        self.consume_keyword("main", "Expected 'main'")?; // consume 'main'
-        // function name after 'main'
-        // Accept either Identifier or the keyword 'main' explicitly (to support `main main()`).
-        let func_name = match self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Identifier(ref n), .. }) => {
-                let n = n.clone();
-                self.advance();
-                n
-            }
-            Some(TokenInfo { kind: TokenKind::Keyword(ref k), .. }) if k == "main" => {
-                // Treat keyword(main) as the identifier "main" in this specific slot
-                self.advance();
-                "main".to_string()
-            }
-            Some(token) => {
-                return Err(CompilerError::syntax_error(
-                    "Expected function name after 'main'",
-                    token.location.clone(),
-                ).with_hint("Try adding identifier here"));
-            }
-            None => return Err(CompilerError::syntax_error("Expected function name after 'main'", self.last_location.clone())),
-        };
-
-        // Parameters
-        self.consume(&TokenKind::LParen, "Expected '(' after entry function name")?;
-        let mut parameters = Vec::new();
-        if !self.check(&TokenKind::RParen) {
-            loop {
-                let param_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected parameter name")?;
-                let param_name = match param_name_token {
-                    TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
-                    _ => unreachable!(),
-                };
-                let param_type_annotation = if self.check(&TokenKind::Colon) {
-                    self.advance();
-                    Some(Box::new(self.parse_type_annotation()?))
-                } else { None };
-                parameters.push(Parameter {
-                    name: param_name,
-                    type_annotation: param_type_annotation,
-                    default_value: None,
-                    is_secret: false,
-                });
-                if self.check(&TokenKind::RParen) { break; }
-                self.consume(&TokenKind::Comma, "Expected ',' between parameters")?;
-            }
-        }
-        self.consume(&TokenKind::RParen, "Expected ')' after parameters")?;
-
-        // Optional return type arrow
-        let mut return_type: Option<Box<AstNode>> = None;
-        if self.check(&TokenKind::Arrow) {
-            let arrow_location = self.current_token_info.map(|t| t.location.clone()).unwrap_or_default();
-            self.advance(); // '->'
-
-            // Check for tuple return type syntax: -> (Type1, Type2)
-            if self.check(&TokenKind::LParen) {
-                return Err(CompilerError::syntax_error(
-                    "Tuple return types are not supported",
-                    arrow_location
-                ).with_hint("Return a single value. If you need multiple values, consider using a custom type or restructuring your code."));
-            }
-
-            if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::NilLiteral, .. })) {
-                self.advance(); // consume 'nil' => treat as no return type (void)
-                return_type = None;
-            } else {
-                return_type = Some(Box::new(self.parse_type_annotation()?));
-            }
-        }
-
-        // Optional pragmas
-        let mut pragmas = Vec::new();
-        if self.check(&TokenKind::LPragma) {
-            pragmas = self.parse_pragma()?;
-        }
-
-        // Body
-        self.consume(&TokenKind::Colon, "Expected ':' after entry function header")?;
-        let body = self.parse_indented_block()?;
-
-        // Represent as a normal FunctionDefinition with the provided name.
-        // Codegen/semantics will treat this as the program entry.
-        let mut pragmas = pragmas;
-        // Inject an internal marker so codegen can recognize explicit entry uniformly.
-        // We piggyback on pragmas with a synthetic {.entry.} added here.
-        pragmas.push(Pragma::Simple("entry".to_string(), start_location.clone()));
-
-        Ok(AstNode::FunctionDefinition {
-            name: Some(func_name),
-            parameters,
-            return_type,
-            body: Box::new(body),
-            is_secret: false, // 'main' cannot be prefixed with 'secret'
-            pragmas,
-            location: start_location,
-            node_id,
+            node_id,                  // Store the unique ID
         })
     }
 
     fn parse_type_definition(&mut self) -> CompilerResult<AstNode> {
-        self.parse_type_definition_impl(false) // Not secret by default
-    }
-
-    fn parse_type_definition_impl(&mut self, is_secret: bool) -> CompilerResult<AstNode> {
         let location = self.get_location();
         // Determine if it's object, enum, or type alias
         if self.check_keyword("object") {
             self.advance(); // Consume 'object'
-            self.parse_object_definition(is_secret, location)
+            self.parse_object_definition(location)
         } else if self.check_keyword("enum") {
             self.advance(); // Consume 'enum'
-            // TODO: Parse enum definition
-            Err(CompilerError::syntax_error("Enum definition parsing not implemented", location))
+                            // TODO: Parse enum definition
+            Err(CompilerError::syntax_error(
+                "Enum definition parsing not implemented",
+                location,
+            ))
         } else if self.check_keyword("type") {
             self.advance(); // Consume 'type'
-            self.parse_type_alias_definition(is_secret, location)
+            self.parse_type_alias_definition(location)
         } else {
-            Err(CompilerError::syntax_error("Expected 'object', 'enum', or 'type' for type definition", location))
+            Err(CompilerError::syntax_error(
+                "Expected 'object', 'enum', or 'type' for type definition",
+                location,
+            ))
         }
     }
 
-    fn parse_type_alias_definition(&mut self, is_secret: bool, location: SourceLocation) -> CompilerResult<AstNode> {
-        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected type alias name after 'type'")?;
+    fn parse_type_alias_definition(&mut self, location: SourceLocation) -> CompilerResult<AstNode> {
+        let name_token = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected type alias name after 'type'",
+        )?;
         let name = match name_token {
-            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            TokenInfo {
+                kind: TokenKind::Identifier(n),
+                ..
+            } => n.clone(),
             _ => unreachable!(),
         };
 
         self.consume(&TokenKind::Assign, "Expected '=' after type alias name")?;
         let target_type = self.parse_type_annotation()?;
 
-        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
-            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after type alias, found {:?}", self.current_token_info), self.get_location()));
+        if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+        {
+            return Err(CompilerError::syntax_error(
+                format!(
+                    "Expected newline, EOF, or dedent after type alias, found {:?}",
+                    self.current_token_info
+                ),
+                self.get_location(),
+            ));
         }
 
         Ok(AstNode::TypeAlias {
             name,
             target_type: Box::new(target_type),
-            is_secret,
+            is_secret: false,
             location,
         })
     }
@@ -489,26 +457,45 @@ impl<'a> Parser<'a> {
         } else if self.check_keyword("type") {
             self.advance();
             self.parse_builtin_type_definition(false, location)
-        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "opaque") {
+        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "opaque")
+        {
             self.advance();
             self.parse_builtin_type_definition(true, location)
         } else {
-            Err(CompilerError::syntax_error("Expected 'object', 'type', or 'opaque' after 'builtin'", self.get_location()))
+            Err(CompilerError::syntax_error(
+                "Expected 'object', 'type', or 'opaque' after 'builtin'",
+                self.get_location(),
+            ))
         }
     }
 
-    fn parse_builtin_type_definition(&mut self, is_opaque_object: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+    fn parse_builtin_type_definition(
+        &mut self,
+        is_opaque_object: bool,
+        location: SourceLocation,
+    ) -> CompilerResult<AstNode> {
         let name = match self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Identifier(ref n), .. }) => {
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(ref n),
+                ..
+            }) => {
                 let name = n.clone();
                 self.advance();
                 name
             }
-            Some(TokenInfo { kind: TokenKind::NilLiteral, .. }) => {
+            Some(TokenInfo {
+                kind: TokenKind::NilLiteral,
+                ..
+            }) => {
                 self.advance();
                 "nil".to_string()
             }
-            _ => return Err(CompilerError::syntax_error("Expected builtin type name", self.get_location())),
+            _ => {
+                return Err(CompilerError::syntax_error(
+                    "Expected builtin type name",
+                    self.get_location(),
+                ))
+            }
         };
 
         let target_type = if self.check(&TokenKind::Assign) {
@@ -518,8 +505,17 @@ impl<'a> Parser<'a> {
             None
         };
 
-        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
-            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after builtin type definition, found {:?}", self.current_token_info), self.get_location()));
+        if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+        {
+            return Err(CompilerError::syntax_error(
+                format!(
+                    "Expected newline, EOF, or dedent after builtin type definition, found {:?}",
+                    self.current_token_info
+                ),
+                self.get_location(),
+            ));
         }
 
         Ok(AstNode::BuiltinTypeDefinition {
@@ -530,14 +526,26 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_builtin_object_definition(&mut self, location: SourceLocation) -> CompilerResult<AstNode> {
-        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected builtin object name after 'object'")?;
+    fn parse_builtin_object_definition(
+        &mut self,
+        location: SourceLocation,
+    ) -> CompilerResult<AstNode> {
+        let name_token = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected builtin object name after 'object'",
+        )?;
         let name = match name_token {
-            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            TokenInfo {
+                kind: TokenKind::Identifier(n),
+                ..
+            } => n.clone(),
             _ => unreachable!(),
         };
 
-        self.consume(&TokenKind::Colon, "Expected ':' after builtin object header")?;
+        self.consume(
+            &TokenKind::Colon,
+            "Expected ':' after builtin object header",
+        )?;
         let methods = self.parse_builtin_object_methods()?;
 
         Ok(AstNode::BuiltinObjectDefinition {
@@ -548,11 +556,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_builtin_object_methods(&mut self) -> CompilerResult<Vec<AstNode>> {
-        self.consume(&TokenKind::Newline, "Expected newline after builtin object header")?;
+        self.consume(
+            &TokenKind::Newline,
+            "Expected newline after builtin object header",
+        )?;
         while self.check(&TokenKind::Newline) {
             self.advance();
         }
-        self.consume(&TokenKind::Indent, "Expected indented method declarations after builtin object header")?;
+        self.consume(
+            &TokenKind::Indent,
+            "Expected indented method declarations after builtin object header",
+        )?;
 
         let mut methods = Vec::new();
         while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
@@ -564,14 +578,21 @@ impl<'a> Parser<'a> {
             }
 
             if !self.check_keyword("def") {
-                return Err(CompilerError::syntax_error("Expected builtin object method declaration starting with 'def'", self.get_location()));
+                return Err(CompilerError::syntax_error(
+                    "Expected builtin object method declaration starting with 'def'",
+                    self.get_location(),
+                ));
             }
 
-            let method = self.parse_function_definition(false)?;
+            let method = self.parse_function_definition()?;
             match &method {
-                AstNode::FunctionDefinition { pragmas, .. } if Self::pragmas_include_builtin(pragmas) => {}
+                AstNode::FunctionDefinition { pragmas, .. }
+                    if Self::pragmas_include_builtin(pragmas) => {}
                 AstNode::FunctionDefinition { location, .. } => {
-                    return Err(CompilerError::syntax_error("Builtin object methods must use the {.builtin.} pragma", location.clone()));
+                    return Err(CompilerError::syntax_error(
+                        "Builtin object methods must use the {.builtin.} pragma",
+                        location.clone(),
+                    ));
                 }
                 _ => unreachable!(),
             }
@@ -582,10 +603,16 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.consume(&TokenKind::Dedent, "Expected dedentation to end builtin object declaration")?;
+        self.consume(
+            &TokenKind::Dedent,
+            "Expected dedentation to end builtin object declaration",
+        )?;
 
         if methods.is_empty() {
-            return Err(CompilerError::syntax_error("Builtin object definition must have at least one method", self.get_location()));
+            return Err(CompilerError::syntax_error(
+                "Builtin object definition must have at least one method",
+                self.get_location(),
+            ));
         }
 
         Ok(methods)
@@ -600,11 +627,17 @@ impl<'a> Parser<'a> {
     /// Or with base type:
     ///   object Name(BaseType):
     ///     field1: Type1
-    fn parse_object_definition(&mut self, is_secret: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+    fn parse_object_definition(&mut self, location: SourceLocation) -> CompilerResult<AstNode> {
         // Parse object name
-        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected object name after 'object'")?;
+        let name_token = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected object name after 'object'",
+        )?;
         let name = match name_token {
-            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            TokenInfo {
+                kind: TokenKind::Identifier(n),
+                ..
+            } => n.clone(),
             _ => unreachable!(),
         };
 
@@ -628,7 +661,7 @@ impl<'a> Parser<'a> {
             name,
             base_type,
             fields,
-            is_secret,
+            is_secret: false,
             location,
         })
     }
@@ -664,18 +697,24 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            // Check for 'secret' modifier on field
-            let field_is_secret = if self.check_keyword("secret") {
-                self.advance();
-                true
-            } else {
-                false
-            };
+            if self.check_keyword("secret") {
+                return Err(CompilerError::syntax_error(
+                    "The 'secret' descriptor is only valid in type annotations",
+                    self.get_location(),
+                )
+                .with_hint("Use 'field_name: secret <type>' instead"));
+            }
 
             // Parse field name
-            let field_name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected field name")?;
+            let field_name_token = self.consume(
+                &TokenKind::Identifier("".to_string()),
+                "Expected field name",
+            )?;
             let field_name = match field_name_token {
-                TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+                TokenInfo {
+                    kind: TokenKind::Identifier(n),
+                    ..
+                } => n.clone(),
                 _ => unreachable!(),
             };
 
@@ -686,7 +725,7 @@ impl<'a> Parser<'a> {
             fields.push(FieldDefinition {
                 name: field_name,
                 type_annotation: Box::new(field_type),
-                is_secret: field_is_secret,
+                is_secret: false,
             });
 
             // Consume newline after field definition
@@ -774,7 +813,10 @@ impl<'a> Parser<'a> {
 
         // Parse one or more identifiers separated by commas
         let mut variables = Vec::new();
-        let first_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected loop variable name")?;
+        let first_ident = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected loop variable name",
+        )?;
         let first_name = match &first_ident.kind {
             TokenKind::Identifier(n) => n.clone(),
             _ => unreachable!(),
@@ -782,7 +824,10 @@ impl<'a> Parser<'a> {
         variables.push(first_name);
         while self.check(&TokenKind::Comma) {
             self.advance(); // consume ','
-            let ident_tok = self.consume(&TokenKind::Identifier("".to_string()), "Expected loop variable name after ','")?;
+            let ident_tok = self.consume(
+                &TokenKind::Identifier("".to_string()),
+                "Expected loop variable name after ','",
+            )?;
             if let TokenKind::Identifier(n) = &ident_tok.kind {
                 variables.push(n.clone());
             }
@@ -799,7 +844,10 @@ impl<'a> Parser<'a> {
 
             // Check if next token is '..' for range syntax
             match &self.current_token_info {
-                Some(TokenInfo { kind: TokenKind::Operator(op), .. }) if op == ".." => {
+                Some(TokenInfo {
+                    kind: TokenKind::Operator(op),
+                    ..
+                }) if op == ".." => {
                     // This is a range expression - consume '..' and parse right side
                     self.advance();
                     let right = self.parse_expression_with_precedence(4)?;
@@ -833,13 +881,19 @@ impl<'a> Parser<'a> {
     fn parse_return_statement(&mut self) -> CompilerResult<AstNode> {
         let start_location = self.get_location();
         self.consume_keyword("return", "Expected 'return'")?;
-        let value = if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+        let value = if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+        {
             Some(Box::new(self.parse_expression()?))
         } else {
             None
         };
 
-        Ok(AstNode::Return { value, location: start_location })
+        Ok(AstNode::Return {
+            value,
+            location: start_location,
+        })
     }
 
     fn parse_discard_statement(&mut self) -> CompilerResult<AstNode> {
@@ -848,8 +902,19 @@ impl<'a> Parser<'a> {
         let expression = self.parse_expression()?;
 
         // Expect newline, EOF, or Dedent after the statement
-        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after discard statement, found {:?}", self.current_token_info), self.get_location()));
+        if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+            && !self.check(&TokenKind::RParen)
+        /* Allow in expr lists */
+        {
+            return Err(CompilerError::syntax_error(
+                format!(
+                    "Expected newline, EOF, or dedent after discard statement, found {:?}",
+                    self.current_token_info
+                ),
+                self.get_location(),
+            ));
         }
 
         Ok(AstNode::DiscardStatement {
@@ -868,7 +933,10 @@ impl<'a> Parser<'a> {
 
         // Parse module path: identifier.identifier.identifier...
         let mut module_path = Vec::new();
-        let first_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected module name after 'import'")?;
+        let first_ident = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected module name after 'import'",
+        )?;
         module_path.push(match &first_ident.kind {
             TokenKind::Identifier(n) => n.clone(),
             _ => unreachable!(),
@@ -877,7 +945,10 @@ impl<'a> Parser<'a> {
         // Continue parsing dot-separated identifiers
         while self.check(&TokenKind::Dot) {
             self.advance(); // consume '.'
-            let next_ident = self.consume(&TokenKind::Identifier("".to_string()), "Expected module name after '.'")?;
+            let next_ident = self.consume(
+                &TokenKind::Identifier("".to_string()),
+                "Expected module name after '.'",
+            )?;
             module_path.push(match &next_ident.kind {
                 TokenKind::Identifier(n) => n.clone(),
                 _ => unreachable!(),
@@ -887,7 +958,10 @@ impl<'a> Parser<'a> {
         // Optional alias: "as <identifier>"
         let alias = if self.check_keyword("as") {
             self.advance(); // consume 'as'
-            let alias_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected alias name after 'as'")?;
+            let alias_token = self.consume(
+                &TokenKind::Identifier("".to_string()),
+                "Expected alias name after 'as'",
+            )?;
             Some(match &alias_token.kind {
                 TokenKind::Identifier(n) => n.clone(),
                 _ => unreachable!(),
@@ -897,9 +971,15 @@ impl<'a> Parser<'a> {
         };
 
         // Expect newline, EOF, or Dedent after import statement
-        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+        if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+        {
             return Err(CompilerError::syntax_error(
-                format!("Expected newline after import statement, found {:?}", self.current_token_info),
+                format!(
+                    "Expected newline after import statement, found {:?}",
+                    self.current_token_info
+                ),
                 self.get_location(),
             ));
         }
@@ -917,22 +997,34 @@ impl<'a> Parser<'a> {
     // Gets the precedence level of the current token (if it's an infix operator).
     fn current_precedence(&self) -> u8 {
         match &self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Operator(op), .. }) => match op.as_str() {
+            Some(TokenInfo {
+                kind: TokenKind::Operator(op),
+                ..
+            }) => match op.as_str() {
                 "or" => 1,
                 "and" => 2,
                 "==" | "!=" | "<" | "<=" | ">" | ">=" | "is" | "in" => 3, // Comparison operators
-                ".." => 4, // Range operator
-                "+" | "-" => 5, // Addition/Subtraction
+                ".." => 4,                                                // Range operator
+                "+" | "-" => 5,                                           // Addition/Subtraction
                 "*" | "/" | "%" => 6, // Multiplication/Division/Modulo
                 // Add other operators like power (**), bitwise (&, |, ^), etc.
                 _ => 0, // Not an infix operator or lowest precedence
             },
             // Function call '(' has high precedence
-            Some(TokenInfo { kind: TokenKind::LParen, .. }) => 7, // Higher than multiplication/division
+            Some(TokenInfo {
+                kind: TokenKind::LParen,
+                ..
+            }) => 7, // Higher than multiplication/division
             // Index access '[' has same precedence as field access
-            Some(TokenInfo { kind: TokenKind::LBracket, .. }) => 8, // Same as field access
+            Some(TokenInfo {
+                kind: TokenKind::LBracket,
+                ..
+            }) => 8, // Same as field access
             // Field access '.' has even higher precedence
-            Some(TokenInfo { kind: TokenKind::Dot, .. }) => 8, // Higher than function calls
+            Some(TokenInfo {
+                kind: TokenKind::Dot,
+                ..
+            }) => 8, // Higher than function calls
             _ => 0, // Not an operator
         }
     }
@@ -941,16 +1033,20 @@ impl<'a> Parser<'a> {
     fn parse_prefix(&mut self) -> CompilerResult<AstNode> {
         let token_info = self.advance().ok_or_else(|| {
             // Use last_location if current is None
-            CompilerError::syntax_error("Unexpected end of file while parsing expression", self.last_location.clone())
+            CompilerError::syntax_error(
+                "Unexpected end of file while parsing expression",
+                self.last_location.clone(),
+            )
         })?;
 
         match &token_info.kind {
-            TokenKind::IntLiteral { value, kind, .. } => Ok(AstNode::Literal(Value::Int { value: *value, kind: kind.clone() })), 
+            TokenKind::IntLiteral { value, kind, .. } => Ok(AstNode::Literal(Value::Int { value: *value, kind: kind.clone() })),
             TokenKind::FloatLiteral(f) => Ok(AstNode::Literal(Value::Float(*f))),
             TokenKind::StringLiteral(s) => Ok(AstNode::Literal(Value::String(s.clone()))),
             TokenKind::BoolLiteral(b) => Ok(AstNode::Literal(Value::Bool(*b))),
             TokenKind::NilLiteral => Ok(AstNode::Literal(Value::Nil)),
             TokenKind::Identifier(name) => Ok(AstNode::Identifier(name.clone(), token_info.location.clone())),
+            TokenKind::Keyword(name) if name == "type" => Ok(AstNode::Identifier(name.clone(), token_info.location.clone())),
             TokenKind::LParen => {
                 let expr = self.parse_expression_with_precedence(0)?; // Parse expression inside parentheses
                 self.consume(&TokenKind::RParen, "Expected ')' after parenthesized expression")?;
@@ -1018,7 +1114,10 @@ impl<'a> Parser<'a> {
     fn parse_infix(&mut self, left: AstNode) -> CompilerResult<AstNode> {
         let operator_location = self.get_location(); // Location of the operator/paren/dot
         let token_info = self.current_token_info.ok_or_else(|| {
-             CompilerError::syntax_error("Unexpected end of file while parsing infix expression", self.last_location.clone())
+            CompilerError::syntax_error(
+                "Unexpected end of file while parsing infix expression",
+                self.last_location.clone(),
+            )
         })?;
 
         match &token_info.kind {
@@ -1122,14 +1221,21 @@ impl<'a> Parser<'a> {
             if matches!(expr, AstNode::Identifier(..)) {
                 return Err(CompilerError::syntax_error(
                     "Tuple unpacking is not supported",
-                    start_location
-                ).with_hint("Assign to a single variable instead of multiple comma-separated variables"));
+                    start_location,
+                )
+                .with_hint(
+                    "Assign to a single variable instead of multiple comma-separated variables",
+                ));
             }
         }
 
         // Check for compound assignment operators: +=, -=, *=, /=, %=
         // These are desugared into: x = x op value
-        if let Some(TokenInfo { kind: TokenKind::Operator(op), location: op_location }) = self.current_token_info {
+        if let Some(TokenInfo {
+            kind: TokenKind::Operator(op),
+            location: op_location,
+        }) = self.current_token_info
+        {
             if let Some(base_op) = match op.as_str() {
                 "+=" => Some("+"),
                 "-=" => Some("-"),
@@ -1143,7 +1249,11 @@ impl<'a> Parser<'a> {
                 let rhs = self.parse_expression()?;
 
                 // Expect newline, EOF, or Dedent after the statement
-                if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) {
+                if !self.check(&TokenKind::Newline)
+                    && !self.check(&TokenKind::Eof)
+                    && !self.check(&TokenKind::Dedent)
+                    && !self.check(&TokenKind::RParen)
+                {
                     return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after compound assignment, found {:?}", self.current_token_info), self.get_location()));
                 }
 
@@ -1168,9 +1278,20 @@ impl<'a> Parser<'a> {
             self.advance(); // Consume '='
             let value = self.parse_expression()?;
             // Expect newline, EOF, or Dedent after the statement
-             if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-                 return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after assignment, found {:?}", self.current_token_info), self.get_location()));
-             }
+            if !self.check(&TokenKind::Newline)
+                && !self.check(&TokenKind::Eof)
+                && !self.check(&TokenKind::Dedent)
+                && !self.check(&TokenKind::RParen)
+            /* Allow in expr lists */
+            {
+                return Err(CompilerError::syntax_error(
+                    format!(
+                        "Expected newline, EOF, or dedent after assignment, found {:?}",
+                        self.current_token_info
+                    ),
+                    self.get_location(),
+                ));
+            }
             Ok(AstNode::Assignment {
                 target: Box::new(expr),
                 value: Box::new(value),
@@ -1179,9 +1300,20 @@ impl<'a> Parser<'a> {
         } else {
             // Assume it's just an expression used as a statement (e.g., function call)
             // Expect newline, EOF, or Dedent after the statement
-             if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-                 return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after expression statement, found {:?}", self.current_token_info), self.get_location()));
-             }
+            if !self.check(&TokenKind::Newline)
+                && !self.check(&TokenKind::Eof)
+                && !self.check(&TokenKind::Dedent)
+                && !self.check(&TokenKind::RParen)
+            /* Allow in expr lists */
+            {
+                return Err(CompilerError::syntax_error(
+                    format!(
+                        "Expected newline, EOF, or dedent after expression statement, found {:?}",
+                        self.current_token_info
+                    ),
+                    self.get_location(),
+                ));
+            }
             Ok(expr)
         }
     }
@@ -1190,16 +1322,19 @@ impl<'a> Parser<'a> {
     // IMPORTANT: This function *only* parses the type name/structure itself.
     // It handles the optional 'secret' keyword internally.
     fn parse_type_annotation(&mut self) -> CompilerResult<AstNode> {
-         let type_location = self.get_location(); // Location of 'secret' or the type identifier
-         let mut is_secret = false;
-         if self.check_keyword("secret") {
-             self.advance(); // Consume 'secret'
-             is_secret = true;
-         }
+        let type_location = self.get_location(); // Location of 'secret' or the type identifier
+        let mut is_secret = false;
+        if self.check_keyword("secret") {
+            self.advance(); // Consume 'secret'
+            is_secret = true;
+        }
 
-         // Now parse the actual type
-         let base_type = match &self.current_token_info {
-            Some(TokenInfo { kind: TokenKind::Identifier(name), .. }) => {
+        // Now parse the actual type
+        let base_type = match &self.current_token_info {
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(name),
+                ..
+            }) => {
                 let base_name = name.clone();
                 self.advance(); // Consume identifier
 
@@ -1210,14 +1345,23 @@ impl<'a> Parser<'a> {
                     match base_name.as_str() {
                         "List" => {
                             let element_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after List element type")?;
+                            self.consume(
+                                &TokenKind::RBracket,
+                                "Expected ']' after List element type",
+                            )?;
                             AstNode::ListType(Box::new(element_type))
                         }
                         "Dict" => {
                             let key_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::Comma, "Expected ',' between Dict key and value types")?;
+                            self.consume(
+                                &TokenKind::Comma,
+                                "Expected ',' between Dict key and value types",
+                            )?;
                             let value_type = self.parse_type_annotation()?;
-                            self.consume(&TokenKind::RBracket, "Expected ']' after Dict value type")?;
+                            self.consume(
+                                &TokenKind::RBracket,
+                                "Expected ']' after Dict value type",
+                            )?;
                             AstNode::DictType {
                                 key_type: Box::new(key_type),
                                 value_type: Box::new(value_type),
@@ -1230,12 +1374,14 @@ impl<'a> Parser<'a> {
                                 return Err(CompilerError::syntax_error(
                                     format!("Unknown generic type: {}", base_name),
                                     type_location,
-                                ).with_hint("Did you mean 'List'? Generic types use PascalCase"));
+                                )
+                                .with_hint("Did you mean 'List'? Generic types use PascalCase"));
                             } else if base_name == "dict" {
                                 return Err(CompilerError::syntax_error(
                                     format!("Unknown generic type: {}", base_name),
                                     type_location,
-                                ).with_hint("Did you mean 'Dict'? Generic types use PascalCase"));
+                                )
+                                .with_hint("Did you mean 'Dict'? Generic types use PascalCase"));
                             }
 
                             // General generic type: Name[T1, T2, ...]
@@ -1245,9 +1391,15 @@ impl<'a> Parser<'a> {
                                 if self.check(&TokenKind::RBracket) {
                                     break;
                                 }
-                                self.consume(&TokenKind::Comma, "Expected ',' between type parameters")?;
+                                self.consume(
+                                    &TokenKind::Comma,
+                                    "Expected ',' between type parameters",
+                                )?;
                             }
-                            self.consume(&TokenKind::RBracket, "Expected ']' after type parameters")?;
+                            self.consume(
+                                &TokenKind::RBracket,
+                                "Expected ']' after type parameters",
+                            )?;
                             AstNode::GenericType {
                                 base_name,
                                 type_params,
@@ -1266,7 +1418,13 @@ impl<'a> Parser<'a> {
                     None => ("end of file".to_string(), self.last_location.clone()),
                 };
 
-                return Err(CompilerError::syntax_error(format!("Expected type name identifier after 'secret' (if present), found {}", found_str), location));
+                return Err(CompilerError::syntax_error(
+                    format!(
+                        "Expected type name identifier after 'secret' (if present), found {}",
+                        found_str
+                    ),
+                    location,
+                ));
             }
         };
 
@@ -1278,25 +1436,38 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_variable_declaration(&mut self, is_secret: bool) -> CompilerResult<AstNode> {
+    fn parse_variable_declaration(&mut self) -> CompilerResult<AstNode> {
         let start_location = self.get_location(); // Location of 'var'
-        // Only allow 'var' now. If someone writes 'let', we should have errored earlier,
-        // but double-check here defensively.
+                                                  // Only allow 'var' now. If someone writes 'let', we should have errored earlier,
+                                                  // but double-check here defensively.
         if self.check_keyword("var") {
             self.advance(); // Consume 'var'
-        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "let") {
+        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "let")
+        {
             let loc = self.get_location();
-            return Err(CompilerError::syntax_error("The 'let' keyword is no longer supported", loc)
-                .with_hint("Use 'var' for variable declarations"));
+            return Err(CompilerError::syntax_error(
+                "The 'let' keyword is no longer supported",
+                loc,
+            )
+            .with_hint("Use 'var' for variable declarations"));
         } else {
             // Should not reach here if caller used correct entry points
-            return Err(CompilerError::syntax_error("Expected 'var' to start a variable declaration", self.get_location()));
+            return Err(CompilerError::syntax_error(
+                "Expected 'var' to start a variable declaration",
+                self.get_location(),
+            ));
         }
         let is_mutable = true; // With only 'var', declarations are always mutable
 
-        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected variable name")?;
+        let name_token = self.consume(
+            &TokenKind::Identifier("".to_string()),
+            "Expected variable name",
+        )?;
         let name = match name_token {
-            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            TokenInfo {
+                kind: TokenKind::Identifier(n),
+                ..
+            } => n.clone(),
             _ => unreachable!(), // consume ensures it's an identifier
         };
 
@@ -1304,21 +1475,37 @@ impl<'a> Parser<'a> {
         let type_annotation = if self.check(&TokenKind::Colon) {
             self.advance(); // Consume ':'
             Some(Box::new(self.parse_type_annotation()?))
-        } else { None };
+        } else {
+            None
+        };
 
         let mut value = None;
         if self.check(&TokenKind::Assign) {
             self.advance(); // Consume '='
             value = Some(Box::new(self.parse_expression()?));
         } else if type_annotation.is_none() {
-             let location = self.get_location();
-             return Err(CompilerError::syntax_error("Variable declaration needs either a type annotation or an initial value", location)
-                 .with_hint("Add a type annotation with ':' or initialize with '='"));
+            let location = self.get_location();
+            return Err(CompilerError::syntax_error(
+                "Variable declaration needs either a type annotation or an initial value",
+                location,
+            )
+            .with_hint("Add a type annotation with ':' or initialize with '='"));
         }
 
         // Expect newline, EOF, or Dedent after declaration
-        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::RParen) /* Allow in expr lists */ {
-             return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after variable declaration, found {:?}", self.current_token_info), self.get_location()));
+        if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Eof)
+            && !self.check(&TokenKind::Dedent)
+            && !self.check(&TokenKind::RParen)
+        /* Allow in expr lists */
+        {
+            return Err(CompilerError::syntax_error(
+                format!(
+                    "Expected newline, EOF, or dedent after variable declaration, found {:?}",
+                    self.current_token_info
+                ),
+                self.get_location(),
+            ));
         }
 
         Ok(AstNode::VariableDeclaration {
@@ -1326,7 +1513,7 @@ impl<'a> Parser<'a> {
             type_annotation,
             value,
             is_mutable, // always true now
-            is_secret, // Set the flag based on whether 'secret let/var' was used
+            is_secret: false,
             location: start_location, // Use location of 'var'
         })
     }
@@ -1340,8 +1527,14 @@ impl<'a> Parser<'a> {
                 break;
             }
             let pragma_name = match self.current_token_info {
-                Some(TokenInfo { kind: TokenKind::Identifier(name), .. })
-                | Some(TokenInfo { kind: TokenKind::Keyword(name), .. }) => Some(name.clone()),
+                Some(TokenInfo {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                })
+                | Some(TokenInfo {
+                    kind: TokenKind::Keyword(name),
+                    ..
+                }) => Some(name.clone()),
                 _ => None,
             };
 
@@ -1351,19 +1544,29 @@ impl<'a> Parser<'a> {
                 if self.check(&TokenKind::Colon) {
                     self.advance(); // Consume ':'
                     let value_node = self.parse_expression()?; // Parse the value expression
-                    pragmas.push(Pragma::KeyValue(name, Box::new(value_node), pragma_location));
+                    pragmas.push(Pragma::KeyValue(
+                        name,
+                        Box::new(value_node),
+                        pragma_location,
+                    ));
                 } else {
                     pragmas.push(Pragma::Simple(name, pragma_location));
                 }
             } else {
-                 return Err(CompilerError::syntax_error("Expected identifier or keyword for pragma name", self.get_location()));
+                return Err(CompilerError::syntax_error(
+                    "Expected identifier or keyword for pragma name",
+                    self.get_location(),
+                ));
             }
 
             // Consume optional separator dot or expect end
             if self.check(&TokenKind::Dot) {
                 self.advance(); // Consume '.'
             } else if !self.check(&TokenKind::RPragma) {
-                 return Err(CompilerError::syntax_error("Expected '.' separator or '.}' to end pragma", self.get_location()));
+                return Err(CompilerError::syntax_error(
+                    "Expected '.' separator or '.}' to end pragma",
+                    self.get_location(),
+                ));
             } else {
                 // RPragma will be consumed next iteration or at the end
             }
@@ -1391,8 +1594,11 @@ pub fn parse(tokens: &[TokenInfo], filename: &str) -> CompilerResult<AstNode> {
             Some(token) => (format!("{:?}", token), token.location.clone()),
             None => ("end of file".to_string(), parser.last_location.clone()),
         };
-        
-        Err(CompilerError::syntax_error(format!("Unexpected token after parsing finished: {}", found_str), location))
+
+        Err(CompilerError::syntax_error(
+            format!("Unexpected token after parsing finished: {}", found_str),
+            location,
+        ))
     } else {
         Ok(root_node)
     }

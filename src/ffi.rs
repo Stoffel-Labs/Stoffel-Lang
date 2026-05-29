@@ -2,8 +2,8 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
+use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant};
 use crate::compiler::{compile, CompilerOptions};
-use crate::bytecode::{CompiledProgram, BytecodeChunk, Constant};
 use crate::errors::CompilerError;
 
 #[repr(C)]
@@ -162,92 +162,147 @@ unsafe fn constant_to_c(constant: &Constant) -> CConstant {
         Constant::I64(val) => {
             let mut data = CConstantData { i64_val: 0 };
             data.i64_val = *val;
-            CConstant { const_type: 0, data }
-        },
+            CConstant {
+                const_type: 0,
+                data,
+            }
+        }
         Constant::I32(val) => {
             let mut data = CConstantData { i32_val: 0 };
             data.i32_val = *val;
-            CConstant { const_type: 1, data }
-        },
+            CConstant {
+                const_type: 1,
+                data,
+            }
+        }
         Constant::I16(val) => {
             let mut data = CConstantData { i16_val: 0 };
             data.i16_val = *val;
-            CConstant { const_type: 2, data }
-        },
+            CConstant {
+                const_type: 2,
+                data,
+            }
+        }
         Constant::I8(val) => {
             let mut data = CConstantData { i8_val: 0 };
             data.i8_val = *val;
-            CConstant { const_type: 3, data }
-        },
+            CConstant {
+                const_type: 3,
+                data,
+            }
+        }
         Constant::U8(val) => {
             let mut data = CConstantData { u8_val: 0 };
             data.u8_val = *val;
-            CConstant { const_type: 4, data }
-        },
+            CConstant {
+                const_type: 4,
+                data,
+            }
+        }
         Constant::U16(val) => {
             let mut data = CConstantData { u16_val: 0 };
             data.u16_val = *val;
-            CConstant { const_type: 5, data }
-        },
+            CConstant {
+                const_type: 5,
+                data,
+            }
+        }
         Constant::U32(val) => {
             let mut data = CConstantData { u32_val: 0 };
             data.u32_val = *val;
-            CConstant { const_type: 6, data }
-        },
+            CConstant {
+                const_type: 6,
+                data,
+            }
+        }
         Constant::U64(val) => {
             let mut data = CConstantData { u64_val: 0 };
             data.u64_val = *val;
-            CConstant { const_type: 7, data }
-        },
+            CConstant {
+                const_type: 7,
+                data,
+            }
+        }
         Constant::Float(val) => {
             let mut data = CConstantData { float_val: 0 };
             data.float_val = f64::from(*val).to_bits() as i64;
-            CConstant { const_type: 8, data }
-        },
+            CConstant {
+                const_type: 8,
+                data,
+            }
+        }
         Constant::Bool(val) => {
             let mut data = CConstantData { bool_val: 0 };
             data.bool_val = if *val { 1 } else { 0 };
-            CConstant { const_type: 9, data }
-        },
+            CConstant {
+                const_type: 9,
+                data,
+            }
+        }
         Constant::String(val) => {
-            let mut data = CConstantData { string_val: ptr::null_mut() };
+            let mut data = CConstantData {
+                string_val: ptr::null_mut(),
+            };
             data.string_val = string_to_c_char(val);
-            CConstant { const_type: 10, data }
-        },
+            CConstant {
+                const_type: 10,
+                data,
+            }
+        }
         Constant::Object(val) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = *val;
-            CConstant { const_type: 11, data }
-        },
+            CConstant {
+                const_type: 11,
+                data,
+            }
+        }
         Constant::Array(val) => {
             let mut data = CConstantData { array_val: 0 };
             data.array_val = *val;
-            CConstant { const_type: 12, data }
-        },
+            CConstant {
+                const_type: 12,
+                data,
+            }
+        }
         Constant::Foreign(val) => {
             let mut data = CConstantData { foreign_val: 0 };
             data.foreign_val = *val;
-            CConstant { const_type: 13, data }
-        },
+            CConstant {
+                const_type: 13,
+                data,
+            }
+        }
         Constant::Closure(_, _) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = 0;
-            CConstant { const_type: 14, data }
-        },
+            CConstant {
+                const_type: 14,
+                data,
+            }
+        }
         Constant::Unit => {
             let mut data = CConstantData { u8_val: 0 };
             data.u8_val = 0;
-            CConstant { const_type: 15, data }
-        },
+            CConstant {
+                const_type: 15,
+                data,
+            }
+        }
         Constant::Share(_, _) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = 0;
-            CConstant { const_type: 16, data }
-        },
+            CConstant {
+                const_type: 16,
+                data,
+            }
+        }
     }
 }
 
-unsafe fn instruction_to_c(instruction: &stoffel_vm_types::instructions::Instruction) -> CInstruction {
+unsafe fn instruction_to_c(
+    instruction: &stoffel_vm_types::instructions::Instruction,
+) -> CInstruction {
     match instruction {
         stoffel_vm_types::instructions::Instruction::NOP => CInstruction {
             opcode: stoffel_vm_types::instructions::ReducedOpcode::NOP as u8,
@@ -556,11 +611,8 @@ pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChun
     }
 
     if !chunk.constants.is_null() {
-        let constants = Vec::from_raw_parts(
-            chunk.constants,
-            chunk.constant_count,
-            chunk.constant_count,
-        );
+        let constants =
+            Vec::from_raw_parts(chunk.constants, chunk.constant_count, chunk.constant_count);
 
         for constant in constants {
             if constant.const_type == 10 && !constant.data.string_val.is_null() {
@@ -579,11 +631,7 @@ pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerEr
     let errors = &*errors;
 
     if !errors.errors.is_null() {
-        let error_vec = Vec::from_raw_parts(
-            errors.errors,
-            errors.count,
-            errors.count,
-        );
+        let error_vec = Vec::from_raw_parts(errors.errors, errors.count, errors.count);
 
         for error in error_vec {
             if !error.message.is_null() {

@@ -28,12 +28,22 @@ def create_object() -> Object {.builtin.}:
 def get_field(obj: unknown, field: unknown) -> unknown {.builtin.}:
 def set_field(obj: unknown, field: unknown, value: unknown) -> void {.builtin.}:
 def create_closure(function_name: string) -> Closure {.builtin.}:
+def create_closure_with_upvalue(function_name: string, upvalue_name: string) -> Closure {.builtin: "create_closure".}:
 def call_closure(closure: Closure) -> unknown {.builtin.}:
+def call_closure_with_arg(closure: Closure, value: unknown) -> unknown {.builtin: "call_closure".}:
 def get_upvalue(name: string) -> unknown {.builtin.}:
 def set_upvalue(name: string, value: unknown) -> void {.builtin.}:
 def array_push(array: List[unknown], value: unknown) -> int64 {.builtin.}:
-def append(array: List[unknown], value: unknown) -> int64 {.builtin.}:
-def push(array: List[unknown], value: unknown) -> int64 {.builtin.}:
+def append(array: List[unknown], value: unknown) -> int64 {.builtin: "array_push".}:
+def push(array: List[unknown], value: unknown) -> int64 {.builtin: "array_push".}:
 def array_length(array: List[unknown]) -> int64 {.builtin.}:
-def length(array: List[unknown]) -> int64 {.builtin.}:
-def len(array: List[unknown]) -> int64 {.builtin.}:
+def length(array: List[unknown]) -> int64 {.builtin: "array_length".}:
+def len(array: List[unknown]) -> int64 {.builtin: "array_length".}:
+
+builtin object LocalStorage:
+  def store(key: unknown, value: unknown) -> bool {.builtin.}:
+  def load(key: unknown) -> unknown {.builtin.}:
+  def load_share(key: unknown) -> Share {.builtin: "LocalStorage.load".}:
+  def retrieve(key: unknown) -> unknown {.builtin.}:
+  def delete(key: unknown) -> bool {.builtin.}:
+  def exists(key: unknown) -> bool {.builtin.}:

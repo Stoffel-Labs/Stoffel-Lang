@@ -1,7 +1,7 @@
 # Fibonacci sample that computes fib(10) = 55
 # Uses an iterative approach with a running pair (a, b).
 
-main main() -> nil:
+def main() -> nil:
   var n = 10
   var result = 0
 

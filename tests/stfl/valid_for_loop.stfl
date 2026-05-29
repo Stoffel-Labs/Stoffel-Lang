@@ -1,6 +1,6 @@
 # Example program that should parse correctly
 
-main main() -> nil:
+def main() -> nil:
   var total = 0
 
   # Iterate over a simple integer range

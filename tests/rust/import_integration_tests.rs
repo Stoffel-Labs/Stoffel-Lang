@@ -15,8 +15,8 @@ fn get_test_path(relative_path: &str) -> PathBuf {
 
 fn compile_test_file(relative_path: &str) -> Result<(), Vec<String>> {
     let path = get_test_path(relative_path);
-    let source = std::fs::read_to_string(&path)
-        .map_err(|e| vec![format!("Failed to read file: {}", e)])?;
+    let source =
+        std::fs::read_to_string(&path).map_err(|e| vec![format!("Failed to read file: {}", e)])?;
 
     let options = CompilerOptions::default();
     compile_file(&path, &source, &options)
@@ -29,7 +29,11 @@ fn compile_test_file(relative_path: &str) -> Result<(), Vec<String>> {
 #[test]
 fn test_simple_import() {
     let result = compile_test_file("main_with_import.stfl");
-    assert!(result.is_ok(), "Simple import should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Simple import should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Chain Import Tests ====================
@@ -39,7 +43,11 @@ fn test_simple_import() {
 #[test]
 fn test_chain_imports() {
     let result = compile_test_file("chain/main_chain.stfl");
-    assert!(result.is_ok(), "Chain imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Chain imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Diamond Import Tests ====================
@@ -49,7 +57,11 @@ fn test_chain_imports() {
 #[test]
 fn test_diamond_imports() {
     let result = compile_test_file("diamond/main_diamond.stfl");
-    assert!(result.is_ok(), "Diamond imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Diamond imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Multiple Import Tests ====================
@@ -58,7 +70,11 @@ fn test_diamond_imports() {
 #[test]
 fn test_multiple_imports() {
     let result = compile_test_file("multi/main_multi.stfl");
-    assert!(result.is_ok(), "Multiple imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Multiple imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Alias Import Tests ====================
@@ -67,13 +83,21 @@ fn test_multiple_imports() {
 #[test]
 fn test_import_with_alias() {
     let result = compile_test_file("alias/main_alias.stfl");
-    assert!(result.is_ok(), "Import with alias should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Import with alias should compile: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn test_std_builtin_imports_are_declaration_only() {
     let result = compile_test_file("std_builtin_import.stfl");
-    assert!(result.is_ok(), "Std builtin imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Std builtin imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Nested Import Tests ====================
@@ -82,7 +106,11 @@ fn test_std_builtin_imports_are_declaration_only() {
 #[test]
 fn test_nested_imports() {
     let result = compile_test_file("nested/main_nested.stfl");
-    assert!(result.is_ok(), "Nested imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Nested imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Error Cases ====================
@@ -96,7 +124,8 @@ fn test_circular_imports_detected() {
     let errors = result.unwrap_err();
     let error_text = errors.join("\n");
     assert!(
-        error_text.to_lowercase().contains("circular") || error_text.to_lowercase().contains("cycle"),
+        error_text.to_lowercase().contains("circular")
+            || error_text.to_lowercase().contains("cycle"),
         "Error should mention circular dependency: {}",
         error_text
     );
@@ -111,7 +140,8 @@ fn test_missing_module_detected() {
     let errors = result.unwrap_err();
     let error_text = errors.join("\n");
     assert!(
-        error_text.to_lowercase().contains("not found") || error_text.to_lowercase().contains("module"),
+        error_text.to_lowercase().contains("not found")
+            || error_text.to_lowercase().contains("module"),
         "Error should mention module not found: {}",
         error_text
     );
@@ -123,7 +153,11 @@ fn test_missing_module_detected() {
 #[test]
 fn test_single_file_no_imports() {
     let result = compile_test_file("utils/math.stfl");
-    assert!(result.is_ok(), "Single file without imports should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Single file without imports should compile: {:?}",
+        result.err()
+    );
 }
 
 // ==================== Module Export Tests ====================
@@ -133,7 +167,11 @@ fn test_single_file_no_imports() {
 fn test_exported_functions_accessible() {
     // The main_with_import.stfl uses add and multiply from utils/math.stfl
     let result = compile_test_file("main_with_import.stfl");
-    assert!(result.is_ok(), "Exported functions should be accessible: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Exported functions should be accessible: {:?}",
+        result.err()
+    );
 }
 
 /// Tests that chain exports work (main can use functions from transitive deps).
@@ -141,5 +179,9 @@ fn test_exported_functions_accessible() {
 fn test_transitive_exports() {
     // main_chain uses triple (from middle) and middle uses double and base_value (from base)
     let result = compile_test_file("chain/main_chain.stfl");
-    assert!(result.is_ok(), "Transitive exports should work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Transitive exports should work: {:?}",
+        result.err()
+    );
 }

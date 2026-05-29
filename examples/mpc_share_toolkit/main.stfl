@@ -1,0 +1,48 @@
+def main() -> int64:
+  var client_count = ClientStore.get_number_clients()
+  var base = Share.from_clear_int(125, 64)
+  var adjustment = Share.from_clear(17)
+  var fixed_weight = Share.from_clear_fixed(1.25, 64, 16)
+  var random_mask = Share.random()
+
+  var score = Share.add(base, adjustment)
+  score = Share.sub(score, Share.from_clear_int(5, 64))
+  score = Share.add_scalar(score, 9)
+  score = Share.mul_scalar(score, 2)
+  score = Share.add(score, Share.neg(Share.from_clear_int(-3, 64)))
+
+  if Mpc.has_capability("multiplication"):
+    score = Share.mul(score, Share.from_clear_int(1, 64))
+
+  discard fixed_weight
+  discard random_mask
+
+  var batch: List[Share] = [base, adjustment, score]
+  discard Share.batch_open(batch)
+  discard Share.interpolate_local(batch)
+  discard Share.open_fixed(Share.from_clear_fixed(2.5, 64, 16))
+  discard Share.get_type(score)
+  discard Share.get_party_id(score)
+
+  if Share.has_commitments(score):
+    discard Share.get_commitment(score, 0)
+
+  discard Share.commitment_count(score)
+
+  if client_count > 0 and Mpc.has_capability("client-output"):
+    discard Share.send_to_client(score, 0)
+    if client_count > 1:
+      var output_shares: List[Share] = [score]
+      discard MpcOutput.send_to_client(1, output_shares)
+
+  if Mpc.has_capability("field-arithmetic"):
+    var field_element = Mpc.rand()
+    var field_score = Share.mul_field(score, field_element)
+    discard Share.open_field(field_score)
+
+  if Mpc.has_capability("open-in-exponent"):
+    discard Share.open_exp(score, Mpc.curve())
+    discard Share.open_exp_custom(score, Bytes.from_string("generator"))
+
+  discard Mpc.rand_int(64)
+  return Share.open(score)

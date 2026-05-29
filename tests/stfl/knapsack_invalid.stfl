@@ -15,7 +15,7 @@ def knapsack(items: List[secret int64], weights: List[secret int64], max_capacit
   return chosen_items, final_capacity
 
 
-main main() -> nil:
+def main() -> nil:
   var items: List[secret int64] = [1, 2, 3, 4, 5]
   var weigths: List[secret int64] = [1000, 800, 500, 300, 100]
   var max_capacity: int64 = 2000

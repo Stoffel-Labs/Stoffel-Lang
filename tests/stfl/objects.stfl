@@ -20,12 +20,12 @@ object Person:
   active: bool
 
 # ==========================================
-# Secret Object Definition
+# Object with Secret Field Types
 # ==========================================
 
-secret object SecureData:
-  value: int64
-  key: int64
+object SecureData:
+  value: secret int64
+  key: secret int64
 
 # ==========================================
 # Object with Secret Fields
@@ -87,8 +87,8 @@ object NumericContainer:
 # ==========================================
 
 def process_shares() -> secret int64:
-  secret var s1 = ClientStore.take_share(0, 0)
-  secret var s2 = ClientStore.take_share(0, 1)
+  var s1 = ClientStore.take_share(0, 0)
+  var s2 = ClientStore.take_share(0, 1)
   var sum: secret int64 = s1 + s2
   return sum
 
@@ -116,7 +116,7 @@ def create_and_combine_shares() -> int64:
 # Main Entry Point
 # ==========================================
 
-main main() -> nil:
+def main() -> nil:
   # Test Mpc methods
   var my_id = Mpc.party_id()
   var n = Mpc.n_parties()

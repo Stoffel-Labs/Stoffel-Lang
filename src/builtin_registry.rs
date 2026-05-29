@@ -62,6 +62,18 @@ impl BuiltinRegistry {
 
         None
     }
+
+    pub fn vm_symbol_for_call(&self, name: &str) -> Option<&str> {
+        if let Some(function) = self.functions.get(name) {
+            return Some(function.vm_symbol.as_str());
+        }
+
+        let (object_name, method_name) = name.split_once('.')?;
+        self.objects
+            .get(object_name)
+            .and_then(|object| object.methods.get(method_name))
+            .map(|method| method.qualified_name.as_str())
+    }
 }
 
 pub fn builtin_registry() -> &'static BuiltinRegistry {

@@ -10,12 +10,14 @@
 //! - Field access
 //! - Object types in declarations
 
+use stoffel_vm_types::instructions::Instruction;
+use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 use stoffellang::compiler::{compile, CompilerOptions};
+use stoffellang::errors::ErrorReporter;
 use stoffellang::lexer::tokenize;
 use stoffellang::parser::parse;
 use stoffellang::semantic::analyze;
 use stoffellang::ufcs::transform_ufcs;
-use stoffellang::errors::ErrorReporter;
 
 // ===========================================
 // Helper functions
@@ -42,8 +44,13 @@ fn analyze_source(source: &str) -> Result<(), Vec<String>> {
     let ast = parse(&tokens, "test.stfl").map_err(|e| vec![e.message])?;
     let transformed = transform_ufcs(ast);
     let mut reporter = ErrorReporter::new();
-    analyze(transformed, &mut reporter, "test.stfl")
-        .map_err(|_| reporter.get_all().iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    analyze(transformed, &mut reporter, "test.stfl").map_err(|_| {
+        reporter
+            .get_all()
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+    })?;
     Ok(())
 }
 
@@ -62,6 +69,35 @@ fn expect_compile_error(source: &str, error_substring: &str) -> bool {
     }
 }
 
+fn instruction_registers(instruction: &Instruction) -> Vec<usize> {
+    match instruction {
+        Instruction::LD(reg, _)
+        | Instruction::LDI(reg, _)
+        | Instruction::RET(reg)
+        | Instruction::PUSHARG(reg) => vec![*reg],
+        Instruction::MOV(dest, src) | Instruction::NOT(dest, src) | Instruction::CMP(dest, src) => {
+            vec![*dest, *src]
+        }
+        Instruction::ADD(dest, left, right)
+        | Instruction::SUB(dest, left, right)
+        | Instruction::MUL(dest, left, right)
+        | Instruction::DIV(dest, left, right)
+        | Instruction::MOD(dest, left, right)
+        | Instruction::AND(dest, left, right)
+        | Instruction::OR(dest, left, right)
+        | Instruction::XOR(dest, left, right)
+        | Instruction::SHL(dest, left, right)
+        | Instruction::SHR(dest, left, right) => vec![*dest, *left, *right],
+        Instruction::NOP
+        | Instruction::JMP(_)
+        | Instruction::JMPEQ(_)
+        | Instruction::JMPNEQ(_)
+        | Instruction::JMPLT(_)
+        | Instruction::JMPGT(_)
+        | Instruction::CALL(_) => Vec::new(),
+    }
+}
+
 // ===========================================
 // ClientStore Tests - Full Pipeline
 // ===========================================
@@ -69,7 +105,7 @@ fn expect_compile_error(source: &str, error_substring: &str) -> bool {
 #[test]
 fn test_clientstore_take_share_basic() {
     let source = r#"
-secret var share = ClientStore.take_share(0, 0)
+var share = ClientStore.take_share(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -77,7 +113,7 @@ secret var share = ClientStore.take_share(0, 0)
 #[test]
 fn test_clientstore_take_share_with_type_annotation() {
     let source = r#"
-var share: secret int64 = ClientStore.take_share(0, 0)
+var share: Share = ClientStore.take_share(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -85,17 +121,73 @@ var share: secret int64 = ClientStore.take_share(0, 0)
 #[test]
 fn test_clientstore_take_share_secret_keyword_with_type() {
     let source = r#"
-secret var share: int64 = ClientStore.take_share(0, 0)
+var share: Share = ClientStore.take_share(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
 
 #[test]
+fn test_secret_share_variable_uses_object_registers() {
+    let source = r#"
+var share = ClientStore.take_share(0, 0)
+var scaled = Share.mul_scalar(share, 2)
+"#;
+    let program = compile(source, "test.stfl", &default_options()).expect("program compiles");
+    let max_register = program
+        .main_chunk
+        .instructions
+        .iter()
+        .flat_map(instruction_registers)
+        .max()
+        .unwrap_or(0);
+
+    assert!(
+        max_register < DEFAULT_SECRET_REGISTER_START,
+        "Share object handles should not be allocated into secret scalar registers; max register was {max_register}"
+    );
+}
+
+#[test]
+fn test_def_returning_share_uses_object_registers() {
+    let source = r#"
+def normalize_score(raw_score: Share) -> Share:
+  var adjusted = Share.add_scalar(raw_score, 25)
+  return Share.mul_scalar(adjusted, 2)
+
+def main() -> nil:
+  var score = ClientStore.take_share(0, 0)
+  var normalized = normalize_score(score)
+  discard Share.open(normalized)
+"#;
+    let program = compile(source, "test.stfl", &default_options()).expect("program compiles");
+    let max_register = program
+        .main_chunk
+        .instructions
+        .iter()
+        .chain(
+            program
+                .function_chunks
+                .get("normalize_score")
+                .expect("function chunk exists")
+                .instructions
+                .iter(),
+        )
+        .flat_map(instruction_registers)
+        .max()
+        .unwrap_or(0);
+
+    assert!(
+        max_register < DEFAULT_SECRET_REGISTER_START,
+        "def returning Share should keep Share handles in object registers; max register was {max_register}"
+    );
+}
+
+#[test]
 fn test_clientstore_multiple_shares() {
     let source = r#"
-secret var s1 = ClientStore.take_share(0, 0)
-secret var s2 = ClientStore.take_share(0, 1)
-secret var s3 = ClientStore.take_share(1, 0)
+var s1 = ClientStore.take_share(0, 0)
+var s2 = ClientStore.take_share(0, 1)
+var s3 = ClientStore.take_share(1, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -103,7 +195,7 @@ secret var s3 = ClientStore.take_share(1, 0)
 #[test]
 fn test_clientstore_take_share_fixed() {
     let source = r#"
-secret var share = ClientStore.take_share_fixed(0, 0)
+var share: Share = ClientStore.take_share_fixed(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -119,12 +211,12 @@ var n = ClientStore.get_number_clients()
 #[test]
 fn test_clientstore_in_function() {
     let source = r#"
-def get_share_from_client(client_id: int64, share_id: int64) -> secret int64:
-  var result: secret int64 = ClientStore.take_share(client_id, share_id)
+def get_share_from_client(client_id: int64, share_id: int64) -> Share:
+  var result: Share = ClientStore.take_share(client_id, share_id)
   return result
 
-main main() -> nil:
-  secret var s = get_share_from_client(0, 0)
+def main() -> nil:
+  var s = get_share_from_client(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -132,22 +224,29 @@ main main() -> nil:
 #[test]
 fn test_clientstore_shares_arithmetic() {
     let source = r#"
-secret var a = ClientStore.take_share(0, 0)
-secret var b = ClientStore.take_share(0, 1)
-var sum: secret int64 = a + b
-var diff: secret int64 = a - b
-var prod: secret int64 = a * b
+var a = ClientStore.take_share(0, 0)
+var b = ClientStore.take_share(0, 1)
+var sum = Share.add(a, b)
+var diff = Share.sub(a, b)
+var prod = Share.mul(a, b)
 "#;
     assert!(compile_source(source).is_ok());
 }
 
 #[test]
-fn test_clientstore_assign_to_typed_var() {
-    // ClientStore.take_share returns secret int64
-    // Currently the compiler allows assignment to an int64 typed variable
-    // (this may be by design for explicit declassification scenarios)
+fn test_clientstore_take_share_rejects_clear_int_var() {
     let source = r#"
 var clear_var: int64 = ClientStore.take_share(0, 0)
+"#;
+    assert!(compile_source(source).is_err());
+}
+
+#[test]
+fn test_clientstore_take_share_inferred_var_stays_share_for_mul() {
+    let source = r#"
+var client_left = ClientStore.take_share(0, 0)
+var right = Share.from_clear(21)
+var product = Share.mul(client_left, right)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -431,7 +530,7 @@ var s = Share.from_clear(42)
 #[test]
 fn test_method_call_multiple_args() {
     let source = r#"
-secret var s = ClientStore.take_share(0, 1)
+var s = ClientStore.take_share(0, 1)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -509,7 +608,7 @@ def leader_election() -> int64:
   var nonce = Mpc.rand_int(64)
   return my_id
 
-main main() -> nil:
+def main() -> nil:
   var leader = leader_election()
   print("Protocol completed")
 "#;
@@ -519,15 +618,15 @@ main main() -> nil:
 #[test]
 fn test_secret_sharing_workflow() {
     let source = r#"
-def compute_sum(num_shares: int64) -> secret int64:
-  var total: secret int64 = ClientStore.take_share(0, 0)
+def compute_sum(num_shares: int64) -> Share:
+  var total = ClientStore.take_share(0, 0)
   for i in 1..num_shares:
-    var s: secret int64 = ClientStore.take_share(0, i)
-    total = total + s
+    var s = ClientStore.take_share(0, i)
+    total = Share.add(total, s)
   return total
 
-main main() -> nil:
-  var result: secret int64 = compute_sum(5)
+def main() -> nil:
+  var result = compute_sum(5)
   print("Computation done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -550,7 +649,7 @@ var sum2 = Share.add(sum, s_c)
 #[test]
 fn test_conditional_based_on_mpc_state() {
     let source = r#"
-main main() -> nil:
+def main() -> nil:
   var ready = Mpc.is_ready()
   var my_id = Mpc.party_id()
   var n = Mpc.n_parties()
@@ -567,11 +666,11 @@ main main() -> nil:
 #[test]
 fn test_mixed_builtin_objects() {
     let source = r#"
-main main() -> nil:
+def main() -> nil:
   var my_id = Mpc.party_id()
   var n_clients = ClientStore.get_number_clients()
   for client in 0..n_clients:
-    secret var s = ClientStore.take_share(client, 0)
+    var s = ClientStore.take_share(client, 0)
   Rbc.broadcast("shares collected")
   Aba.propose(true)
   print("Protocol complete")
@@ -587,7 +686,7 @@ main main() -> nil:
 fn test_ufcs_method_to_function_clientstore() {
     // ClientStore.take_share(0, 0) should become a qualified call
     let source = r#"
-secret var s = ClientStore.take_share(0, 0)
+var s = ClientStore.take_share(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -625,7 +724,7 @@ var x = Mpc.undefined_method()
 #[test]
 fn test_error_wrong_argument_count_too_few() {
     let source = r#"
-secret var s = ClientStore.take_share(0)
+var s = ClientStore.take_share(0)
 "#;
     assert!(expect_compile_error(source, "argument"));
 }
@@ -655,7 +754,7 @@ var x = NonExistentObject.method()
 fn test_bytecode_clientstore_call() {
     // Verify the code compiles to bytecode successfully
     let source = r#"
-secret var s = ClientStore.take_share(0, 0)
+var s = ClientStore.take_share(0, 0)
 "#;
     let result = compile(source, "test.stfl", &default_options());
     assert!(result.is_ok());

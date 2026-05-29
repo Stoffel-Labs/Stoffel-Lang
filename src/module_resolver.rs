@@ -7,8 +7,8 @@
 //! - Providing topological sort for compilation order
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::ast::AstNode;
 use crate::errors::{CompilerError, SourceLocation};
@@ -112,7 +112,10 @@ impl DependencyGraph {
     pub fn add_edge(&mut self, from: &str, to: &str) {
         self.modules.insert(from.to_string());
         self.modules.insert(to.to_string());
-        self.edges.entry(from.to_string()).or_default().push(to.to_string());
+        self.edges
+            .entry(from.to_string())
+            .or_default()
+            .push(to.to_string());
     }
 
     /// Performs topological sort using Kahn's algorithm.
@@ -130,7 +133,10 @@ impl DependencyGraph {
 
         for (from, deps) in &self.edges {
             for dep in deps {
-                reverse_edges.entry(dep.as_str()).or_default().push(from.as_str());
+                reverse_edges
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(from.as_str());
             }
         }
 
@@ -143,7 +149,11 @@ impl DependencyGraph {
 
         // Calculate in-degree as number of imports (dependencies this module has)
         for module in &self.modules {
-            let num_deps = self.edges.get(module.as_str()).map(|d| d.len()).unwrap_or(0);
+            let num_deps = self
+                .edges
+                .get(module.as_str())
+                .map(|d| d.len())
+                .unwrap_or(0);
             in_degree.insert(module.as_str(), num_deps);
         }
 
@@ -176,7 +186,9 @@ impl DependencyGraph {
         // Check for cycle
         if result.len() != self.modules.len() {
             // There's a cycle - find it
-            let cycle = self.find_cycle().unwrap_or_else(|| vec!["<unknown>".to_string()]);
+            let cycle = self
+                .find_cycle()
+                .unwrap_or_else(|| vec!["<unknown>".to_string()]);
             return Err(cycle);
         }
 
@@ -187,7 +199,11 @@ impl DependencyGraph {
     /// Returns the cycle path if found.
     fn find_cycle(&self) -> Option<Vec<String>> {
         #[derive(Clone, Copy, PartialEq)]
-        enum State { White, Gray, Black }
+        enum State {
+            White,
+            Gray,
+            Black,
+        }
 
         let mut state: HashMap<&str, State> = HashMap::new();
         let mut parent: HashMap<&str, &str> = HashMap::new();
@@ -225,7 +241,9 @@ impl DependencyGraph {
 
         for module in &self.modules {
             if state.get(module.as_str()) == Some(&State::White) {
-                if let Some(cycle_start) = dfs(module.as_str(), &self.edges, &mut state, &mut parent) {
+                if let Some(cycle_start) =
+                    dfs(module.as_str(), &self.edges, &mut state, &mut parent)
+                {
                     // Reconstruct cycle path
                     let mut cycle = vec![cycle_start.to_string()];
                     let mut current = parent.get(cycle_start);
@@ -286,7 +304,10 @@ impl ModuleResolver {
             .to_string();
 
         // Start resolving from the entry file
-        let _ = self.resolve_module_from_file(&entry_file, ModulePath::new(vec![entry_module_name.clone()]));
+        let _ = self.resolve_module_from_file(
+            &entry_file,
+            ModulePath::new(vec![entry_module_name.clone()]),
+        );
 
         if !self.errors.is_empty() {
             return Err(self.errors.clone());
@@ -296,7 +317,11 @@ impl ModuleResolver {
     }
 
     /// Recursively resolves a module and its dependencies.
-    fn resolve_module_from_file(&mut self, file_path: &Path, module_path: ModulePath) -> Result<(), ()> {
+    fn resolve_module_from_file(
+        &mut self,
+        file_path: &Path,
+        module_path: ModulePath,
+    ) -> Result<(), ()> {
         let module_key = module_path.as_string();
 
         // Skip if already resolved
@@ -308,10 +333,17 @@ impl ModuleResolver {
         if self.resolving_modules.contains(&module_key) {
             // Build cycle path from currently resolving modules
             let cycle: Vec<String> = self.resolving_modules.iter().cloned().collect();
-            self.errors.push(CompilerError::syntax_error(
-                format!("Circular import detected involving '{}'", module_key),
-                SourceLocation::default(),
-            ).with_hint(format!("Import cycle: {} -> {}", cycle.join(" -> "), module_key)));
+            self.errors.push(
+                CompilerError::syntax_error(
+                    format!("Circular import detected involving '{}'", module_key),
+                    SourceLocation::default(),
+                )
+                .with_hint(format!(
+                    "Import cycle: {} -> {}",
+                    cycle.join(" -> "),
+                    module_key
+                )),
+            );
             return Err(());
         }
 
@@ -323,7 +355,12 @@ impl ModuleResolver {
             Ok(s) => s,
             Err(e) => {
                 self.errors.push(CompilerError::syntax_error(
-                    format!("Cannot read module '{}' from '{}': {}", module_key, file_path.display(), e),
+                    format!(
+                        "Cannot read module '{}' from '{}': {}",
+                        module_key,
+                        file_path.display(),
+                        e
+                    ),
                     SourceLocation::default(),
                 ));
                 return Err(());
@@ -331,7 +368,8 @@ impl ModuleResolver {
         };
 
         // Tokenize
-        let filename = file_path.file_name()
+        let filename = file_path
+            .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or(&module_key);
 
@@ -370,39 +408,47 @@ impl ModuleResolver {
             let imported_module_key = import_info.module_path.as_string();
 
             // Add edge in dependency graph
-            self.dependency_graph.add_edge(&module_key, &imported_module_key);
+            self.dependency_graph
+                .add_edge(&module_key, &imported_module_key);
 
             // Resolve the imported module's file path
             let imported_file_path = import_info.module_path.to_file_path(base_dir);
 
             // Check if file exists
             if !imported_file_path.exists() {
-                self.errors.push(CompilerError::syntax_error(
-                    format!(
-                        "Module '{}' not found. Expected file at '{}'",
-                        imported_module_key,
-                        imported_file_path.display()
-                    ),
-                    import_info.location.clone(),
-                ).with_hint("Check that the module path is correct and the file exists"));
+                self.errors.push(
+                    CompilerError::syntax_error(
+                        format!(
+                            "Module '{}' not found. Expected file at '{}'",
+                            imported_module_key,
+                            imported_file_path.display()
+                        ),
+                        import_info.location.clone(),
+                    )
+                    .with_hint("Check that the module path is correct and the file exists"),
+                );
                 continue;
             }
 
             // Recursively resolve the imported module
-            let _ = self.resolve_module_from_file(&imported_file_path, import_info.module_path.clone());
+            let _ =
+                self.resolve_module_from_file(&imported_file_path, import_info.module_path.clone());
         }
 
         // Mark this module as no longer being resolved
         self.resolving_modules.remove(&module_key);
 
         // Store the resolved module
-        self.resolved_modules.insert(module_key, ResolvedModule {
-            module_path,
-            file_path: file_path.to_path_buf(),
-            source,
-            ast,
-            imports,
-        });
+        self.resolved_modules.insert(
+            module_key,
+            ResolvedModule {
+                module_path,
+                file_path: file_path.to_path_buf(),
+                source,
+                ast,
+                imports,
+            },
+        );
 
         Ok(())
     }
@@ -416,7 +462,12 @@ impl ModuleResolver {
 
     fn collect_imports_recursive(node: &AstNode, imports: &mut Vec<ImportInfo>) {
         match node {
-            AstNode::Import { module_path, alias, location, .. } => {
+            AstNode::Import {
+                module_path,
+                alias,
+                location,
+                ..
+            } => {
                 imports.push(ImportInfo {
                     module_path: ModulePath::new(module_path.clone()),
                     alias: alias.clone(),
@@ -442,7 +493,8 @@ impl ModuleResolver {
                 Err(CompilerError::syntax_error(
                     format!("Circular import detected: {}", cycle_str),
                     SourceLocation::default(),
-                ).with_hint("Break the cycle by refactoring shared code into a separate module"))
+                )
+                .with_hint("Break the cycle by refactoring shared code into a separate module"))
             }
         }
     }
@@ -520,7 +572,10 @@ mod tests {
         let utils_pos = order.iter().position(|x| x == "utils").unwrap();
         let main_pos = order.iter().position(|x| x == "main").unwrap();
 
-        assert!(helpers_pos < utils_pos, "helpers should be compiled before utils");
+        assert!(
+            helpers_pos < utils_pos,
+            "helpers should be compiled before utils"
+        );
         assert!(utils_pos < main_pos, "utils should be compiled before main");
     }
 

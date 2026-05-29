@@ -3,12 +3,15 @@
 //! These tests exercise the lexer, parser, UFCS transformer, and semantic analyzer
 //! as a unit, testing real code snippets rather than manually constructed ASTs.
 
+use stoffel_vm_types::instructions::Instruction;
+use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 use stoffellang::compiler::{compile, CompilerOptions};
+use stoffellang::convert_to_binary;
+use stoffellang::errors::ErrorReporter;
 use stoffellang::lexer::tokenize;
 use stoffellang::parser::parse;
 use stoffellang::semantic::analyze;
 use stoffellang::ufcs::transform_ufcs;
-use stoffellang::errors::ErrorReporter;
 
 // ===========================================
 // Helper functions
@@ -35,8 +38,13 @@ fn analyze_source(source: &str) -> Result<(), Vec<String>> {
     let ast = parse(&tokens, "test.stfl").map_err(|e| vec![e.message])?;
     let transformed = transform_ufcs(ast);
     let mut reporter = ErrorReporter::new();
-    analyze(transformed, &mut reporter, "test.stfl")
-        .map_err(|_| reporter.get_all().iter().map(|e| e.message.clone()).collect::<Vec<_>>())?;
+    analyze(transformed, &mut reporter, "test.stfl").map_err(|_| {
+        reporter
+            .get_all()
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+    })?;
     Ok(())
 }
 
@@ -47,11 +55,42 @@ fn compile_source(source: &str) -> Result<(), Vec<String>> {
         .map_err(|errors| errors.iter().map(|e| e.message.clone()).collect())
 }
 
+fn instruction_registers(instruction: &Instruction) -> Vec<usize> {
+    match instruction {
+        Instruction::LD(reg, _)
+        | Instruction::LDI(reg, _)
+        | Instruction::RET(reg)
+        | Instruction::PUSHARG(reg) => vec![*reg],
+        Instruction::MOV(dest, src) | Instruction::NOT(dest, src) | Instruction::CMP(dest, src) => {
+            vec![*dest, *src]
+        }
+        Instruction::ADD(dest, left, right)
+        | Instruction::SUB(dest, left, right)
+        | Instruction::MUL(dest, left, right)
+        | Instruction::DIV(dest, left, right)
+        | Instruction::MOD(dest, left, right)
+        | Instruction::AND(dest, left, right)
+        | Instruction::OR(dest, left, right)
+        | Instruction::XOR(dest, left, right)
+        | Instruction::SHL(dest, left, right)
+        | Instruction::SHR(dest, left, right) => vec![*dest, *left, *right],
+        Instruction::NOP
+        | Instruction::JMP(_)
+        | Instruction::JMPEQ(_)
+        | Instruction::JMPNEQ(_)
+        | Instruction::JMPLT(_)
+        | Instruction::JMPGT(_)
+        | Instruction::CALL(_) => Vec::new(),
+    }
+}
+
 /// Checks if compilation produces an error containing the given substring
 fn expect_error_containing(source: &str, expected_substring: &str) -> bool {
     match compile(source, "test.stfl", &default_options()) {
         Ok(_) => false,
-        Err(errors) => errors.iter().any(|e| e.message.contains(expected_substring)),
+        Err(errors) => errors
+            .iter()
+            .any(|e| e.message.contains(expected_substring)),
     }
 }
 
@@ -186,12 +225,24 @@ def get_value() -> int64:
 }
 
 #[test]
-fn test_parser_secret_function() {
+fn test_parser_function_with_secret_types() {
     let source = r#"
-secret def compute(x: secret int64) -> secret int64:
+def compute(x: secret int64) -> secret int64:
   return x * 2
 "#;
     assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_secret_function_modifier_is_rejected() {
+    let source = r#"
+secret def compute(x: int64) -> int64:
+  return x * 2
+"#;
+    assert!(expect_error_containing(
+        source,
+        "The 'secret' descriptor is only valid in type annotations"
+    ));
 }
 
 // ===========================================
@@ -288,15 +339,30 @@ fn test_parser_typed_variable() {
 }
 
 #[test]
-fn test_parser_secret_variable() {
+fn test_parser_secret_variable_modifier_is_rejected() {
     let source = "secret var x = 42";
-    assert!(parse_source(source).is_ok());
+    assert!(expect_error_containing(
+        source,
+        "The 'secret' descriptor is only valid in type annotations"
+    ));
 }
 
 #[test]
 fn test_parser_secret_typed_variable() {
-    let source = "secret var x: int64 = 42";
+    let source = "var x: secret int64 = 42";
     assert!(parse_source(source).is_ok());
+}
+
+#[test]
+fn test_parser_secret_field_modifier_is_rejected() {
+    let source = r#"
+object SecretRecord:
+  secret value: int64
+"#;
+    assert!(expect_error_containing(
+        source,
+        "The 'secret' descriptor is only valid in type annotations"
+    ));
 }
 
 #[test]
@@ -373,7 +439,7 @@ var result = outer(5)
 #[test]
 fn test_semantic_client_store_take_share() {
     let source = r#"
-secret var share = ClientStore.take_share(0, 0)
+var share = ClientStore.take_share(0, 0)
 "#;
     assert!(analyze_source(source).is_ok());
 }
@@ -442,7 +508,7 @@ var x = foo(1)
 #[test]
 fn test_semantic_secret_assignment_valid() {
     let source = r#"
-secret var share: int64 = ClientStore.take_share(0, 0)
+var share: Share = ClientStore.take_share(0, 0)
 "#;
     assert!(analyze_source(source).is_ok());
 }
@@ -450,7 +516,7 @@ secret var share: int64 = ClientStore.take_share(0, 0)
 #[test]
 fn test_semantic_secret_in_function() {
     let source = r#"
-secret def process(s: secret int64) -> secret int64:
+def process(s: secret int64) -> secret int64:
   return s * 2
 "#;
     assert!(analyze_source(source).is_ok());
@@ -696,6 +762,112 @@ for ch in text:
     assert!(compile_source(source).is_ok());
 }
 
+#[test]
+fn test_compile_type_builtin_and_boolean_ops() {
+    let source = r#"
+var name = type("invoice")
+var accepted = (name == "string") and not false
+if accepted or false:
+  print(name)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_compile_clear_collection_loops_stay_in_clear_registers() {
+    let source = r#"
+var total = 0
+for value in [3, 4, 5]:
+  total += value
+for ch in "risk":
+  discard ch
+"#;
+    let program = compile(source, "test.stfl", &default_options()).expect("program compiles");
+    let max_register = program
+        .main_chunk
+        .instructions
+        .iter()
+        .flat_map(instruction_registers)
+        .max()
+        .unwrap_or(0);
+
+    assert!(
+        max_register < DEFAULT_SECRET_REGISTER_START,
+        "clear collection loops should not allocate secret registers; max register was {max_register}"
+    );
+}
+
+#[test]
+fn test_binary_preserves_function_parameter_names_and_upvalues() {
+    let source = r#"
+def increment_counter(amount: int64) -> int64:
+  var saved_amount = amount
+  var current = get_upvalue("start")
+  var updated = current + saved_amount
+  discard set_upvalue("start", updated)
+  return updated
+
+def create_counter(start: int64) -> Closure:
+  return create_closure_with_upvalue("increment_counter", "start")
+
+def main() -> int64:
+  var counter = create_counter(10)
+  return call_closure_with_arg(counter, 5)
+"#;
+    let program = compile(source, "test.stfl", &default_options()).expect("program compiles");
+    let binary = convert_to_binary(&program);
+
+    let create_counter = binary
+        .functions
+        .iter()
+        .find(|function| function.name == "create_counter")
+        .expect("create_counter function exists");
+    assert_eq!(create_counter.parameters, vec!["start".to_string()]);
+
+    let increment_counter = binary
+        .functions
+        .iter()
+        .find(|function| function.name == "increment_counter")
+        .expect("increment_counter function exists");
+    assert_eq!(increment_counter.parameters, vec!["amount".to_string()]);
+    assert_eq!(increment_counter.upvalues, vec!["start".to_string()]);
+}
+
+#[test]
+fn test_def_main_with_return_type_is_entry_chunk() {
+    let source = r#"
+def main() -> int64:
+  return 42
+"#;
+    let program = compile(source, "test.stfl", &default_options()).expect("program compiles");
+
+    assert!(
+        !program
+            .main_chunk
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::CALL(name) if name == "main")),
+        "def main should be promoted to the entry chunk, not called through a wrapper"
+    );
+    assert!(
+        !program.function_chunks.contains_key("main"),
+        "entry def main should not also be emitted as a normal function"
+    );
+}
+
+#[test]
+fn test_main_keyword_entry_form_is_rejected() {
+    let source = r#"
+main main() -> int64:
+  return 42
+"#;
+
+    assert!(expect_error_containing(
+        source,
+        "The 'main <name>(...)' entry form is no longer supported"
+    ));
+}
+
 // ===========================================
 // Full Compilation Tests - Builtin Objects
 // ===========================================
@@ -703,7 +875,7 @@ for ch in text:
 #[test]
 fn test_compile_client_store() {
     let source = r#"
-secret var share = ClientStore.take_share(0, 0)
+var share = ClientStore.take_share(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -834,7 +1006,7 @@ fn test_long_identifier() {
 
 #[test]
 fn test_ufcs_builtin_object_preserved() {
-    let source = "secret var s = ClientStore.take_share(0, 0)";
+    let source = "var s = ClientStore.take_share(0, 0)";
     assert!(compile_source(source).is_ok());
 }
 

@@ -34,9 +34,7 @@ impl From<crate::bytecode::Constant> for Value {
                 Value::Closure(Arc::new(closure))
             }
             crate::bytecode::Constant::Unit => Value::Unit,
-            crate::bytecode::Constant::Share(share_type, data) => {
-                Value::Share(share_type, ShareData::Opaque(data))
-            }
+            crate::bytecode::Constant::Share(share_type, data) => Value::Share(share_type, data),
         }
     }
 }

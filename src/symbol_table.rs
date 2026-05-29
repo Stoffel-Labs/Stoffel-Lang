@@ -88,6 +88,26 @@ impl SymbolType {
         }
     }
 
+    /// Applies the source-level `secret` modifier to a type.
+    ///
+    /// Runtime object values such as `Share` are already handles to typed VM
+    /// objects. They must not be reclassified as secret scalar registers.
+    pub fn with_secret_modifier(&self) -> SymbolType {
+        let underlying = self.underlying_type().clone();
+        if matches!(underlying, SymbolType::Object(_)) {
+            underlying
+        } else {
+            SymbolType::Secret(Box::new(underlying))
+        }
+    }
+
+    /// Returns true when this type should be stored in the VM's secret register
+    /// bank. Object handles are clear typed values even when they represent
+    /// secret-bearing objects.
+    pub fn uses_secret_register(&self) -> bool {
+        self.is_secret() && !matches!(self.underlying_type(), SymbolType::Object(_))
+    }
+
     /// Returns true if this is any integer type (signed or unsigned).
     pub fn is_integer(&self) -> bool {
         matches!(
@@ -863,20 +883,14 @@ mod tests {
         assert_eq!(method.parameters.len(), 2);
         assert_eq!(method.parameters[0], SymbolType::Int64);
         assert_eq!(method.parameters[1], SymbolType::Int64);
-        assert_eq!(
-            method.return_type,
-            SymbolType::Secret(Box::new(SymbolType::Int64))
-        );
+        assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
         assert_eq!(method.qualified_name, "ClientStore.take_share");
 
         // Test take_share_fixed method
         let take_share_fixed = table.lookup_builtin_method("ClientStore", "take_share_fixed");
         assert!(take_share_fixed.is_some());
         let method = take_share_fixed.unwrap();
-        assert_eq!(
-            method.return_type,
-            SymbolType::Secret(Box::new(SymbolType::Float))
-        );
+        assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
         // Test get_number_clients method
         let get_number_clients = table.lookup_builtin_method("ClientStore", "get_number_clients");
@@ -895,15 +909,22 @@ mod tests {
         assert!(from_clear.is_some());
         let method = from_clear.unwrap();
         assert_eq!(method.parameters.len(), 1);
+        assert_eq!(method.parameters[0], SymbolType::Int64);
         assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
-        // Test add method (raw Share values or Share objects)
+        // Test add method
         let add = table.lookup_builtin_method("Share", "add");
         assert!(add.is_some());
         let method = add.unwrap();
         assert_eq!(method.parameters.len(), 2);
-        assert_eq!(method.parameters[0], SymbolType::Unknown);
-        assert_eq!(method.parameters[1], SymbolType::Unknown);
+        assert_eq!(
+            method.parameters[0],
+            SymbolType::Object("Share".to_string())
+        );
+        assert_eq!(
+            method.parameters[1],
+            SymbolType::Object("Share".to_string())
+        );
         assert_eq!(method.return_type, SymbolType::Object("Share".to_string()));
 
         // Test mul method (network operation)
@@ -1109,6 +1130,7 @@ mod tests {
             "mul_scalar",
             "mul",
             "open",
+            "open_fixed",
             "send_to_client",
             "interpolate_local",
             "get_type",
@@ -1161,6 +1183,11 @@ mod tests {
             "threshold",
             "is_ready",
             "instance_id",
+            "protocol_name",
+            "curve",
+            "field",
+            "has_capability",
+            "capabilities",
             "rand",
             "rand_int",
         ];
@@ -1248,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_list_of_objects_type() {
-        // Check interpolate_local accepts arrays that can hold either raw shares or Share objects.
+        // Check interpolate_local accepts Share arrays.
         let table = SymbolTable::new();
         let interpolate = table
             .lookup_builtin_method("Share", "interpolate_local")
@@ -1257,7 +1284,7 @@ mod tests {
         assert_eq!(interpolate.parameters.len(), 1);
         assert_eq!(
             interpolate.parameters[0],
-            SymbolType::List(Box::new(SymbolType::Unknown))
+            SymbolType::List(Box::new(SymbolType::Object("Share".to_string())))
         );
     }
 

@@ -37,7 +37,10 @@ pub fn suggest_from_symbols(misspelled: &str, symbol_table: &SymbolTable) -> Opt
 
 /// Suggests similar function name from symbol table.
 /// Includes user-defined functions, builtins, and object methods.
-pub fn suggest_function_from_symbols(misspelled: &str, symbol_table: &SymbolTable) -> Option<String> {
+pub fn suggest_function_from_symbols(
+    misspelled: &str,
+    symbol_table: &SymbolTable,
+) -> Option<String> {
     let candidates = symbol_table.get_callable_names();
     suggest_identifier(misspelled, &candidates)
 }
@@ -52,8 +55,8 @@ pub fn suggest_method_to_function(method: &str, symbol_table: &SymbolTable) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::symbol_table::{SymbolInfo, SymbolKind, SymbolType};
     use crate::errors::SourceLocation;
+    use crate::symbol_table::{SymbolInfo, SymbolKind, SymbolType};
 
     fn make_loc() -> SourceLocation {
         SourceLocation::default()
