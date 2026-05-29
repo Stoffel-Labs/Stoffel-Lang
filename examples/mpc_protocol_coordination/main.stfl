@@ -1,7 +1,9 @@
 def main() -> int64:
   var client_count = ClientStore.get_number_clients()
   var session_id = Rbc.broadcast("phase:preprocessing-complete")
-  var direct_message = Rbc.receive(0, 5000)
+  var direct_message = "phase:preprocessing-complete"
+  if Mpc.party_id() != 0:
+    direct_message = Rbc.receive(0, 5000)
   var any_message = Rbc.receive_any(5000)
 
   var proposal = direct_message == "phase:preprocessing-complete"
