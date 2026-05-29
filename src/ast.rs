@@ -130,6 +130,17 @@ pub enum AstNode {
         is_secret: bool,
         location: SourceLocation,
     },
+    BuiltinTypeDefinition {
+        name: String,
+        target_type: Option<Box<AstNode>>,
+        is_opaque_object: bool,
+        location: SourceLocation,
+    },
+    BuiltinObjectDefinition {
+        name: String,
+        methods: Vec<AstNode>,
+        location: SourceLocation,
+    },
     ObjectDefinition {
         name: String,
         base_type: Option<Box<AstNode>>,
@@ -205,6 +216,8 @@ impl AstNode {
             self,
             AstNode::Identifier(_, _)
                 | AstNode::TypeAlias { .. }
+                | AstNode::BuiltinTypeDefinition { .. }
+                | AstNode::BuiltinObjectDefinition { .. }
                 | AstNode::ObjectDefinition { .. }
                 | AstNode::EnumDefinition { .. }
                 | AstNode::FunctionType { .. }
@@ -231,6 +244,7 @@ impl AstNode {
             AstNode::WhileLoop { .. } | AstNode::ForLoop { .. } => false,
             AstNode::Return { .. } | AstNode::Yield(_) | AstNode::Break | AstNode::Continue => false,
             AstNode::FunctionDefinition { .. } | AstNode::TypeAlias { .. } => false,
+            AstNode::BuiltinTypeDefinition { .. } | AstNode::BuiltinObjectDefinition { .. } => false,
             AstNode::Import { .. } => false,
             AstNode::ObjectDefinition { .. } | AstNode::EnumDefinition { .. } => false,
             AstNode::TryCatch { .. } => false,
@@ -255,6 +269,8 @@ impl AstNode {
             AstNode::FieldAccess { location: loc, .. } => loc.clone(),
             AstNode::IndexAccess { location: loc, .. } => loc.clone(),
             AstNode::TypeAlias { location: loc, .. } => loc.clone(),
+            AstNode::BuiltinTypeDefinition { location: loc, .. } => loc.clone(),
+            AstNode::BuiltinObjectDefinition { location: loc, .. } => loc.clone(),
             AstNode::ObjectDefinition { location: loc, .. } => loc.clone(),
             AstNode::EnumDefinition { location: loc, .. } => loc.clone(),
             AstNode::FunctionType { location: loc, .. } => loc.clone(),

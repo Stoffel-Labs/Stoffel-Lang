@@ -249,6 +249,12 @@ unsafe fn constant_to_c(constant: &Constant) -> CConstant {
 
 unsafe fn instruction_to_c(instruction: &stoffel_vm_types::instructions::Instruction) -> CInstruction {
     match instruction {
+        stoffel_vm_types::instructions::Instruction::NOP => CInstruction {
+            opcode: stoffel_vm_types::instructions::ReducedOpcode::NOP as u8,
+            operand1: 0,
+            operand2: 0,
+            operand3: 0,
+        },
         stoffel_vm_types::instructions::Instruction::LD(reg, offset) => CInstruction {
             opcode: 0,
             operand1: *reg,

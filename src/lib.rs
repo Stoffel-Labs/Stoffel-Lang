@@ -4,6 +4,7 @@
 //! It can be used as a standalone compiler or integrated into other tools.
 
 pub mod ast;
+pub mod builtin_registry;
 pub mod core_types;
 pub mod bytecode;
 pub mod codegen;

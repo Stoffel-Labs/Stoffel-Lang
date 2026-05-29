@@ -103,6 +103,12 @@ impl<'a> Parser<'a> {
         id
     }
 
+    fn pragmas_include_builtin(pragmas: &[Pragma]) -> bool {
+        pragmas.iter().any(|pragma| match pragma {
+            Pragma::Simple(name, _) | Pragma::KeyValue(name, _, _) => name == "builtin",
+        })
+    }
+
     // Helper to parse an indented block of statements
     fn parse_indented_block(&mut self) -> CompilerResult<AstNode> {
         // Allow multiple newlines before the indented block starts
@@ -159,6 +165,7 @@ impl<'a> Parser<'a> {
                 "var" => self.parse_variable_declaration(false), // Not secret by default
                 "def" => self.parse_function_definition(false),
                 "main" => self.parse_main_definition(), // special entry syntax
+                "builtin" => self.parse_builtin_declaration(),
                 "type" | "object" | "enum" => self.parse_type_definition(),
                 "secret" => self.parse_secret_declaration(),
                 "if" => self.parse_if_statement_or_expression(),
@@ -226,10 +233,18 @@ impl<'a> Parser<'a> {
         let node_id = self.next_node_id(); // Get a unique ID for this function node
         let start_location = self.get_location(); // Location of 'def'
         self.consume_keyword("def", "Expected 'def'")?; // Consume 'def'
-        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected function name")?;
-        let name = match name_token {
-            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
-            _ => unreachable!(), // consume ensures it's an identifier
+        let name = match self.current_token_info {
+            Some(TokenInfo { kind: TokenKind::Identifier(n), .. }) => {
+                let name = n.clone();
+                self.advance();
+                name
+            }
+            Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) if k == "type" || k == "main" => {
+                let name = k.clone();
+                self.advance();
+                name
+            }
+            _ => return Err(CompilerError::syntax_error("Expected function name", self.get_location())),
         };
 
         self.consume(&TokenKind::LParen, "Expected '(' after function name")?;
@@ -292,7 +307,7 @@ impl<'a> Parser<'a> {
         self.consume(&TokenKind::Colon, "Expected ':' after function header")?;
 
         // For builtins, accept no body (empty block)
-        let is_builtin = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "builtin"));
+        let is_builtin = Self::pragmas_include_builtin(&pragmas);
         let body = if is_builtin {
             // Allow just a header line and no body for builtins
             AstNode::Block(vec![])
@@ -436,11 +451,144 @@ impl<'a> Parser<'a> {
             Err(CompilerError::syntax_error("Enum definition parsing not implemented", location))
         } else if self.check_keyword("type") {
             self.advance(); // Consume 'type'
-            // TODO: Parse type alias
-            Err(CompilerError::syntax_error("Type alias parsing not implemented", location))
+            self.parse_type_alias_definition(is_secret, location)
         } else {
             Err(CompilerError::syntax_error("Expected 'object', 'enum', or 'type' for type definition", location))
         }
+    }
+
+    fn parse_type_alias_definition(&mut self, is_secret: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected type alias name after 'type'")?;
+        let name = match name_token {
+            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            _ => unreachable!(),
+        };
+
+        self.consume(&TokenKind::Assign, "Expected '=' after type alias name")?;
+        let target_type = self.parse_type_annotation()?;
+
+        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after type alias, found {:?}", self.current_token_info), self.get_location()));
+        }
+
+        Ok(AstNode::TypeAlias {
+            name,
+            target_type: Box::new(target_type),
+            is_secret,
+            location,
+        })
+    }
+
+    fn parse_builtin_declaration(&mut self) -> CompilerResult<AstNode> {
+        let location = self.get_location();
+        self.consume_keyword("builtin", "Expected 'builtin'")?;
+
+        if self.check_keyword("object") {
+            self.advance();
+            self.parse_builtin_object_definition(location)
+        } else if self.check_keyword("type") {
+            self.advance();
+            self.parse_builtin_type_definition(false, location)
+        } else if matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Identifier(id), .. }) if id == "opaque") {
+            self.advance();
+            self.parse_builtin_type_definition(true, location)
+        } else {
+            Err(CompilerError::syntax_error("Expected 'object', 'type', or 'opaque' after 'builtin'", self.get_location()))
+        }
+    }
+
+    fn parse_builtin_type_definition(&mut self, is_opaque_object: bool, location: SourceLocation) -> CompilerResult<AstNode> {
+        let name = match self.current_token_info {
+            Some(TokenInfo { kind: TokenKind::Identifier(ref n), .. }) => {
+                let name = n.clone();
+                self.advance();
+                name
+            }
+            Some(TokenInfo { kind: TokenKind::NilLiteral, .. }) => {
+                self.advance();
+                "nil".to_string()
+            }
+            _ => return Err(CompilerError::syntax_error("Expected builtin type name", self.get_location())),
+        };
+
+        let target_type = if self.check(&TokenKind::Assign) {
+            self.advance();
+            Some(Box::new(self.parse_type_annotation()?))
+        } else {
+            None
+        };
+
+        if !self.check(&TokenKind::Newline) && !self.check(&TokenKind::Eof) && !self.check(&TokenKind::Dedent) {
+            return Err(CompilerError::syntax_error(format!("Expected newline, EOF, or dedent after builtin type definition, found {:?}", self.current_token_info), self.get_location()));
+        }
+
+        Ok(AstNode::BuiltinTypeDefinition {
+            name,
+            target_type,
+            is_opaque_object,
+            location,
+        })
+    }
+
+    fn parse_builtin_object_definition(&mut self, location: SourceLocation) -> CompilerResult<AstNode> {
+        let name_token = self.consume(&TokenKind::Identifier("".to_string()), "Expected builtin object name after 'object'")?;
+        let name = match name_token {
+            TokenInfo { kind: TokenKind::Identifier(n), .. } => n.clone(),
+            _ => unreachable!(),
+        };
+
+        self.consume(&TokenKind::Colon, "Expected ':' after builtin object header")?;
+        let methods = self.parse_builtin_object_methods()?;
+
+        Ok(AstNode::BuiltinObjectDefinition {
+            name,
+            methods,
+            location,
+        })
+    }
+
+    fn parse_builtin_object_methods(&mut self) -> CompilerResult<Vec<AstNode>> {
+        self.consume(&TokenKind::Newline, "Expected newline after builtin object header")?;
+        while self.check(&TokenKind::Newline) {
+            self.advance();
+        }
+        self.consume(&TokenKind::Indent, "Expected indented method declarations after builtin object header")?;
+
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
+            while self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+            if self.check(&TokenKind::Dedent) || self.check(&TokenKind::Eof) {
+                break;
+            }
+
+            if !self.check_keyword("def") {
+                return Err(CompilerError::syntax_error("Expected builtin object method declaration starting with 'def'", self.get_location()));
+            }
+
+            let method = self.parse_function_definition(false)?;
+            match &method {
+                AstNode::FunctionDefinition { pragmas, .. } if Self::pragmas_include_builtin(pragmas) => {}
+                AstNode::FunctionDefinition { location, .. } => {
+                    return Err(CompilerError::syntax_error("Builtin object methods must use the {.builtin.} pragma", location.clone()));
+                }
+                _ => unreachable!(),
+            }
+            methods.push(method);
+
+            if self.check(&TokenKind::Newline) {
+                self.advance();
+            }
+        }
+
+        self.consume(&TokenKind::Dedent, "Expected dedentation to end builtin object declaration")?;
+
+        if methods.is_empty() {
+            return Err(CompilerError::syntax_error("Builtin object definition must have at least one method", self.get_location()));
+        }
+
+        Ok(methods)
     }
 
     /// Parses an object definition.
@@ -1191,25 +1339,24 @@ impl<'a> Parser<'a> {
             if self.check(&TokenKind::RPragma) {
                 break;
             }
-            // Expect identifier or dot
-            if self.check(&TokenKind::Identifier("".to_string())) {
-                let token = self.advance().unwrap(); // Safe unwrap
+            let pragma_name = match self.current_token_info {
+                Some(TokenInfo { kind: TokenKind::Identifier(name), .. })
+                | Some(TokenInfo { kind: TokenKind::Keyword(name), .. }) => Some(name.clone()),
+                _ => None,
+            };
+
+            if let Some(name) = pragma_name {
+                let token = self.advance().unwrap();
                 let pragma_location = token.location.clone();
-                if let TokenKind::Identifier(name) = &token.kind {
-                    // Check if it's a key-value pragma (followed by ':')
-                    if self.check(&TokenKind::Colon) {
-                        self.advance(); // Consume ':'
-                        let value_node = self.parse_expression()?; // Parse the value expression
-                        pragmas.push(Pragma::KeyValue(name.clone(), Box::new(value_node), pragma_location));
-                    } else {
-                        // Simple identifier pragma
-                        pragmas.push(Pragma::Simple(name.clone(), pragma_location));
-                    }
+                if self.check(&TokenKind::Colon) {
+                    self.advance(); // Consume ':'
+                    let value_node = self.parse_expression()?; // Parse the value expression
+                    pragmas.push(Pragma::KeyValue(name, Box::new(value_node), pragma_location));
                 } else {
-                    unreachable!(); // Should be identifier based on check
+                    pragmas.push(Pragma::Simple(name, pragma_location));
                 }
             } else {
-                 return Err(CompilerError::syntax_error("Expected identifier for pragma name", self.get_location()));
+                 return Err(CompilerError::syntax_error("Expected identifier or keyword for pragma name", self.get_location()));
             }
 
             // Consume optional separator dot or expect end

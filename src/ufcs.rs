@@ -1,23 +1,10 @@
 use crate::ast::AstNode;
 
-/// List of builtin object names that have special method call semantics.
-/// For these objects, method calls are emitted as qualified names (e.g., "ClientStore.take_share")
-/// without prepending the object as an argument.
-const BUILTIN_OBJECTS: &[&str] = &[
-    "ClientStore",
-    "Share",
-    "Mpc",
-    "MpcOutput",
-    "Rbc",
-    "Aba",
-    "Bytes",
-    "Crypto",
-    "Avss",
-];
-
 /// Checks if a name is a builtin object that uses qualified method names
 fn is_builtin_object(name: &str) -> bool {
-    BUILTIN_OBJECTS.contains(&name)
+    crate::builtin_registry::builtin_registry()
+        .objects
+        .contains_key(name)
 }
 
 /// Transforms the AST to support Uniform Function Call Syntax (UFCS)
@@ -136,6 +123,13 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
                 pragmas,
                 location,
                 node_id,
+            }
+        },
+        AstNode::BuiltinObjectDefinition { name, methods, location } => {
+            AstNode::BuiltinObjectDefinition {
+                name,
+                methods: methods.into_iter().map(transform_ufcs).collect(),
+                location,
             }
         },
         AstNode::IfExpression { condition, then_branch, else_branch } => {

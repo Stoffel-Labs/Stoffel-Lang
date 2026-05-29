@@ -552,7 +552,8 @@ impl InstructionRegisterAnalysis for Instruction {
             Instruction::RET(_) | Instruction::PUSHARG(_) |
             Instruction::CMP(_, _) | Instruction::JMP(_) |
             Instruction::JMPEQ(_) | Instruction::JMPNEQ(_) |
-            Instruction::JMPLT(_) | Instruction::JMPGT(_) | Instruction::CALL(_)
+            Instruction::JMPLT(_) | Instruction::JMPGT(_) | Instruction::CALL(_) |
+            Instruction::NOP
             => vec![], // These don't define registers in the typical sense
         }
     }
@@ -573,7 +574,8 @@ impl InstructionRegisterAnalysis for Instruction {
             Instruction::LD(_, _) | Instruction::LDI(_, _) |
             Instruction::JMP(_) | Instruction::JMPEQ(_) |
             Instruction::JMPNEQ(_) | Instruction::JMPLT(_) |
-            Instruction::JMPGT(_) | Instruction::CALL(_)
+            Instruction::JMPGT(_) | Instruction::CALL(_) |
+            Instruction::NOP
             => vec![], // These don't use registers in the typical sense
         }
     }
@@ -610,6 +612,7 @@ impl InstructionRegisterAnalysis for Instruction {
             Instruction::JMPLT(ref label) => Instruction::JMPLT(label.clone()),
             Instruction::JMPGT(ref label) => Instruction::JMPGT(label.clone()),
             Instruction::CALL(ref name) => Instruction::CALL(name.clone()),
+            Instruction::NOP => Instruction::NOP,
         }
     }
 }

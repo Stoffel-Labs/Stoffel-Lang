@@ -8,6 +8,7 @@ const SRC_EXT: &str = "stfl";
 const BIN_EXT: &str = "stflb";
 
 mod ast;
+mod builtin_registry;
 mod core_types;
 mod bytecode;
 mod codegen;

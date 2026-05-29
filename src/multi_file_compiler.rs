@@ -15,7 +15,7 @@ use crate::bytecode::CompiledProgram;
 use crate::codegen;
 use crate::compiler::CompilerOptions;
 use crate::errors::{CompilerError, ErrorReporter, SourceLocation};
-use crate::module_resolver::{ImportInfo, ModulePath, ModuleResolver, ResolvedModule};
+use crate::module_resolver::{is_std_module_path, ImportInfo, ModulePath, ModuleResolver, ResolvedModule};
 use crate::optimizations;
 use crate::semantic;
 use crate::symbol_table::{SymbolInfo, SymbolKind, SymbolType};
@@ -121,6 +121,10 @@ impl MultiFileCompiler {
         let mut symbols = HashMap::new();
 
         for import in imports {
+            if is_std_module_path(&import.module_path) {
+                continue;
+            }
+
             let module_key = import.module_path.as_string();
 
             let compiled = self.compiled_modules.get(&module_key)

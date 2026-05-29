@@ -49,6 +49,7 @@ fn get_keywords() -> HashMap<String, TokenKind> {
     keywords.insert("var".to_string(), TokenKind::Keyword("var".to_string()));
     keywords.insert("def".to_string(), TokenKind::Keyword("def".to_string()));
     keywords.insert("main".to_string(), TokenKind::Keyword("main".to_string()));
+    keywords.insert("builtin".to_string(), TokenKind::Keyword("builtin".to_string()));
     keywords.insert("type".to_string(), TokenKind::Keyword("type".to_string()));
     keywords.insert("object".to_string(), TokenKind::Keyword("object".to_string()));
     keywords.insert("enum".to_string(), TokenKind::Keyword("enum".to_string()));

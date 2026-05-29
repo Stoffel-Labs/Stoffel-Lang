@@ -57,6 +57,14 @@ impl std::fmt::Display for ModulePath {
     }
 }
 
+pub fn is_std_module_path(module_path: &ModulePath) -> bool {
+    module_path
+        .components
+        .first()
+        .map(|component| component == "std")
+        .unwrap_or(false)
+}
+
 /// Information about an import statement.
 #[derive(Debug, Clone)]
 pub struct ImportInfo {
@@ -355,6 +363,10 @@ impl ModuleResolver {
 
         // Process each import
         for import_info in &imports {
+            if is_std_module_path(&import_info.module_path) {
+                continue;
+            }
+
             let imported_module_key = import_info.module_path.as_string();
 
             // Add edge in dependency graph

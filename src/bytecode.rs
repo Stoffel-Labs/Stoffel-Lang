@@ -41,6 +41,8 @@ pub enum Constant {
 
 #[repr(u8)]
 pub enum ReducedOpcode {
+    // NOP
+    NOP = 0x17,
     // LD r1 [sp+0]
     LD = 0x00,
     // LDI r1 10
@@ -110,6 +112,8 @@ pub enum Operand {
 /// registration and is used by the VM's execution engine.
 #[derive(Debug, Clone, Copy)]
 pub enum ResolvedInstruction {
+    // No operation
+    NOP,
     // Load value from stack to register
     LD(usize, i32),                      // LD r1, [sp+0]
     // Load immediate value to register
@@ -202,6 +206,9 @@ impl BytecodeChunk {
         
         for instruction in &self.instructions {
             let resolved_instruction = match instruction {
+                Instruction::NOP =>
+                    ResolvedInstruction::NOP,
+
                 Instruction::LD(reg, offset) => 
                     ResolvedInstruction::LD(*reg, *offset),
                     

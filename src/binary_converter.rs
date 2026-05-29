@@ -8,7 +8,7 @@
 //! - `convert_to_binary`: Converts a `CompiledProgram` to a `CompiledBinary`
 //! - `save_to_file`: Saves a `CompiledBinary` to a file
 
-use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction, ResolvedInstruction};
+use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction};
 use stoffel_vm_types::compiled_binary::{CompiledBinary, CompiledFunction, CompiledInstruction, BinaryResult};
 use stoffel_vm_types::core_types::Value;
 use std::collections::HashMap;
@@ -141,6 +141,9 @@ fn convert_chunk_to_function(
     let mut instructions = Vec::new();
     for instruction in &chunk.instructions {
         let compiled_instruction = match instruction {
+            Instruction::NOP =>
+                CompiledInstruction::NOP,
+
             Instruction::LD(reg, offset) => 
                 CompiledInstruction::LD(*reg, *offset),
                 
@@ -568,7 +571,8 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
                 | CompiledInstruction::JMPEQ(_) | CompiledInstruction::JMPNEQ(_)
                 | CompiledInstruction::JMPLT(_) | CompiledInstruction::JMPGT(_)
                 | CompiledInstruction::CALL(_) | CompiledInstruction::RET(_)
-                | CompiledInstruction::PUSHARG(_) | CompiledInstruction::CMP(_, _) => {}
+                | CompiledInstruction::PUSHARG(_) | CompiledInstruction::CMP(_, _)
+                | CompiledInstruction::NOP => {}
             }
         }
         regs

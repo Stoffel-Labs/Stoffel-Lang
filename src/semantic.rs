@@ -689,6 +689,43 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok((AstNode::ObjectDefinition { name, base_type, fields, is_secret, location }, SymbolType::Void))
             }
 
+            AstNode::TypeAlias { name, target_type, is_secret, location } => {
+                let mut alias_type = SymbolType::from_ast(&target_type);
+                if is_secret && !alias_type.is_secret() {
+                    alias_type = SymbolType::Secret(Box::new(alias_type));
+                }
+
+                self.validate_type_annotation(&alias_type, target_type.location())?;
+
+                let info = SymbolInfo {
+                    name: name.clone(),
+                    kind: SymbolKind::Type,
+                    symbol_type: alias_type,
+                    is_secret,
+                    defined_at: location.clone(),
+                };
+                self.symbol_table.declare_symbol(info);
+
+                Ok((AstNode::TypeAlias { name, target_type, is_secret, location }, SymbolType::Void))
+            }
+
+            AstNode::BuiltinTypeDefinition { name, target_type, is_opaque_object, location } => {
+                Ok((AstNode::BuiltinTypeDefinition {
+                    name,
+                    target_type,
+                    is_opaque_object,
+                    location,
+                }, SymbolType::Void))
+            }
+
+            AstNode::BuiltinObjectDefinition { name, methods, location } => {
+                Ok((AstNode::BuiltinObjectDefinition {
+                    name,
+                    methods,
+                    location,
+                }, SymbolType::Void))
+            }
+
             // --- Expressions and Control Flow ---
             AstNode::IfExpression { condition, then_branch, else_branch } => {
                 // Analyze condition and enforce that branching on secret is not supported

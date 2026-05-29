@@ -40,85 +40,7 @@ struct CodeGenerator {
 
 impl CodeGenerator {
     fn new() -> Self {
-        let mut known_builtins = HashSet::new();
-        known_builtins.insert("print".to_string());
-        // VM foreign functions for object/array manipulation
-        known_builtins.insert("create_object".to_string());
-        known_builtins.insert("create_array".to_string());
-        known_builtins.insert("get_field".to_string());
-        known_builtins.insert("set_field".to_string());
-        known_builtins.insert("array_push".to_string());
-        known_builtins.insert("array_length".to_string());
-        known_builtins.insert("create_closure".to_string());
-        known_builtins.insert("call_closure".to_string());
-        known_builtins.insert("get_upvalue".to_string());
-        known_builtins.insert("set_upvalue".to_string());
-        known_builtins.insert("type".to_string());
-        // ClientStore builtin object methods (qualified names)
-        known_builtins.insert("ClientStore.take_share".to_string());
-        known_builtins.insert("ClientStore.take_share_fixed".to_string());
-        known_builtins.insert("ClientStore.get_number_clients".to_string());
-        known_builtins.insert("MpcOutput.send_to_client".to_string());
-
-        // Share builtin object methods (matches VM mpc_builtins.rs)
-        known_builtins.insert("Share.from_clear".to_string());
-        known_builtins.insert("Share.from_clear_int".to_string());
-        known_builtins.insert("Share.from_clear_fixed".to_string());
-        known_builtins.insert("Share.add".to_string());
-        known_builtins.insert("Share.sub".to_string());
-        known_builtins.insert("Share.neg".to_string());
-        known_builtins.insert("Share.add_scalar".to_string());
-        known_builtins.insert("Share.mul_scalar".to_string());
-        known_builtins.insert("Share.mul".to_string());
-        known_builtins.insert("Share.open".to_string());
-        known_builtins.insert("Share.send_to_client".to_string());
-        known_builtins.insert("Share.interpolate_local".to_string());
-        known_builtins.insert("Share.get_type".to_string());
-        known_builtins.insert("Share.get_party_id".to_string());
-
-        // Mpc builtin object methods (MPC engine info)
-        known_builtins.insert("Mpc.party_id".to_string());
-        known_builtins.insert("Mpc.n_parties".to_string());
-        known_builtins.insert("Mpc.threshold".to_string());
-        known_builtins.insert("Mpc.is_ready".to_string());
-        known_builtins.insert("Mpc.instance_id".to_string());
-        known_builtins.insert("Mpc.rand".to_string());
-        known_builtins.insert("Mpc.rand_int".to_string());
-
-        // Rbc builtin object methods (Reliable Broadcast)
-        known_builtins.insert("Rbc.broadcast".to_string());
-        known_builtins.insert("Rbc.receive".to_string());
-        known_builtins.insert("Rbc.receive_any".to_string());
-
-        // Aba builtin object methods (Asynchronous Binary Agreement)
-        known_builtins.insert("Aba.propose".to_string());
-        known_builtins.insert("Aba.result".to_string());
-        known_builtins.insert("Aba.propose_and_wait".to_string());
-
-        // Share.batch_open (was missing)
-        known_builtins.insert("Share.batch_open".to_string());
-        known_builtins.insert("Share.open_exp".to_string());
-        known_builtins.insert("Share.random".to_string());
-        known_builtins.insert("Share.get_commitment".to_string());
-        known_builtins.insert("Share.commitment_count".to_string());
-        known_builtins.insert("Share.has_commitments".to_string());
-        known_builtins.insert("Share.mul_field".to_string());
-        known_builtins.insert("Share.open_field".to_string());
-        known_builtins.insert("Share.open_exp_custom".to_string());
-
-        // Crypto and byte-array builtins
-        known_builtins.insert("Bytes.concat".to_string());
-        known_builtins.insert("Bytes.from_string".to_string());
-        known_builtins.insert("Crypto.sha256".to_string());
-        known_builtins.insert("Crypto.sha512".to_string());
-        known_builtins.insert("Crypto.hash_to_field".to_string());
-        known_builtins.insert("Crypto.hash_to_g1".to_string());
-
-        // AVSS object helpers
-        known_builtins.insert("Avss.get_commitment".to_string());
-        known_builtins.insert("Avss.get_key_name".to_string());
-        known_builtins.insert("Avss.commitment_count".to_string());
-        known_builtins.insert("Avss.is_avss_share".to_string());
+        let known_builtins = crate::builtin_registry::builtin_registry().known_call_names();
 
         CodeGenerator {
             current_instructions: Vec::new(),
@@ -877,6 +799,12 @@ impl CodeGenerator {
                 let _field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
 
                 // Object definition doesn't produce a runtime value
+                Ok((VirtualRegister(usize::MAX), false))
+            },
+            AstNode::TypeAlias { .. }
+            | AstNode::BuiltinTypeDefinition { .. }
+            | AstNode::BuiltinObjectDefinition { .. } => {
+                // These declarations are compile-time metadata only.
                 Ok((VirtualRegister(usize::MAX), false))
             },
             AstNode::ListLiteral(elements) => {

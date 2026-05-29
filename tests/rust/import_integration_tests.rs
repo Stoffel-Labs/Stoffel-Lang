@@ -70,6 +70,12 @@ fn test_import_with_alias() {
     assert!(result.is_ok(), "Import with alias should compile: {:?}", result.err());
 }
 
+#[test]
+fn test_std_builtin_imports_are_declaration_only() {
+    let result = compile_test_file("std_builtin_import.stfl");
+    assert!(result.is_ok(), "Std builtin imports should compile: {:?}", result.err());
+}
+
 // ==================== Nested Import Tests ====================
 
 /// Tests deeply nested imports: main_nested -> level1/mid -> level1/level2/deep
