@@ -228,8 +228,8 @@ mod tests {
     fn test_suggest_function_finds_builtin_function() {
         let table = SymbolTable::new();
 
-        let result = suggest_function_from_symbols("aray_push", &table);
-        assert_eq!(result, Some("array_push".to_string()));
+        let result = suggest_function_from_symbols("apend", &table);
+        assert_eq!(result, Some("append".to_string()));
     }
 
     #[test]

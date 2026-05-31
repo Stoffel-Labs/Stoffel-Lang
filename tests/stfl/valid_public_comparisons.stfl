@@ -1,4 +1,4 @@
-def main() -> nil:
+def main() -> None:
   var age: int64 = 30
   var bonusYears: int64 = 3
   var threshold: int64 = 25

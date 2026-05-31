@@ -4,11 +4,11 @@
 # The program returns per-position averages and sends each summed share back to
 # client 0 when client-output is available.
 
-def federated_average_2x3() -> List[float]:
+def federated_average_2x3() -> list[float]:
   var matrix_size: int64 = 6
   var num_clients: int64 = ClientStore.get_number_clients()
-  var result: List[float] = []
-  var output_shares: List[Share] = []
+  var result: list[float] = []
+  var output_shares: list[Share] = []
 
   var element_index: int64 = 0
   while element_index < matrix_size:
@@ -17,18 +17,18 @@ def federated_average_2x3() -> List[float]:
     var client_index: int64 = 1
     while client_index < num_clients:
       var share = ClientStore.take_share_fixed(client_index, element_index)
-      element_sum = Share.add(element_sum, share)
+      element_sum = element_sum.add(share)
       client_index = client_index + 1
 
-    var revealed_sum: float = Share.open_fixed(element_sum)
+    var revealed_sum: float = element_sum.open_fixed()
     result.append(revealed_sum / num_clients)
-    discard output_shares.append(element_sum)
+    output_shares.append(element_sum)
     element_index = element_index + 1
 
   if num_clients > 0 and Mpc.has_capability("client-output"):
-    discard MpcOutput.send_to_client(0, output_shares)
+    MpcOutput.send_to_client(0, output_shares)
 
   return result
 
-def main() -> List[float]:
+def main() -> list[float]:
   return federated_average_2x3()

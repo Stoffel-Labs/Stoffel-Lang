@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::path::Path;
+use stoffel_vm_types::compiled_binary::MpcBackend;
 use stoffellang::binary_converter::{convert_to_binary, save_to_file};
 use stoffellang::compiler::{compile, CompilerOptions};
 use stoffellang::lexer::tokenize;
@@ -27,6 +28,7 @@ fn default_options() -> CompilerOptions {
         optimize: false,
         optimization_level: 0,
         print_ir: false,
+        mpc_backend: MpcBackend::default(),
     }
 }
 
@@ -96,7 +98,7 @@ object Point:
   x: int64
   y: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -108,7 +110,7 @@ fn test_object_single_field() {
 object Counter:
   value: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -123,7 +125,7 @@ object Person:
   name: string
   active: bool
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -136,7 +138,7 @@ object SecureData:
   value: secret int64
   key: secret int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -149,7 +151,7 @@ object PartiallySecret:
   public_id: int64
   secret_value: secret int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -171,7 +173,7 @@ object Circle:
   centerX: int64
   centerY: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -181,10 +183,10 @@ def main() -> nil:
 fn test_object_with_list_field() {
     let source = r#"
 object Container:
-  items: List[int64]
+  items: list[int64]
   count: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -199,7 +201,7 @@ fn test_error_object_no_fields() {
     let source = r#"
 object Empty:
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     // Object must have at least one field
@@ -212,7 +214,7 @@ fn test_error_object_missing_colon() {
 object Point
   x: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(expect_parse_error(source, ":") || expect_parse_error(source, "colon"));
@@ -224,7 +226,7 @@ fn test_error_object_missing_name() {
 object:
   x: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(expect_parse_error(source, "name") || expect_parse_error(source, "identifier"));
@@ -237,7 +239,7 @@ object Point:
   x
   y
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(expect_parse_error(source, ":") || expect_parse_error(source, "type"));
@@ -254,7 +256,7 @@ object Point:
   x: int64
   y: int64
 
-def main() -> nil:
+def main() -> None:
   print("Point object defined")
 "#;
     let result = compile_file_to_bytecode(source, "test_object_point");
@@ -281,7 +283,7 @@ object Vector3D:
   y: float
   z: float
 
-def main() -> nil:
+def main() -> None:
   print("Vectors defined")
 "#;
     let result = compile_file_to_bytecode(source, "test_multiple_objects");
@@ -295,7 +297,7 @@ object Credential:
   user_id: int64
   secret_key: secret int64
 
-def main() -> nil:
+def main() -> None:
   print("Credential object defined")
 "#;
     let result = compile_file_to_bytecode(source, "test_secret_object");
@@ -312,7 +314,7 @@ object Point:
 def helper_func(a: int64) -> int64:
   return a * 2
 
-def main() -> nil:
+def main() -> None:
   var result = helper_func(5)
   print("done")
 "#;
@@ -332,10 +334,80 @@ object Point:
   x: int64
   y: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_object_constructor_with_named_fields() {
+    let source = r#"
+object MpcJob:
+  id: string
+  parties: int64
+  threshold: int64
+  curve: string
+
+def main() -> None:
+  var job = MpcJob(
+    id: "nightly-risk-score",
+    parties: 5,
+    threshold: 1,
+    curve: "bls12-381",
+  )
+  print(job.id)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_object_constructor_allows_empty_then_field_assignment() {
+    let source = r#"
+object MpcJob:
+  id: string
+  threshold: int64
+
+def main() -> None:
+  var job = MpcJob()
+  job.id = "nightly-risk-score"
+  job.threshold = 1
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_object_constructor_rejects_unknown_field() {
+    let source = r#"
+object MpcJob:
+  id: string
+
+def main() -> None:
+  var job = MpcJob(missing: "value")
+"#;
+    let errors = compile_source(source).unwrap_err();
+    assert!(
+        errors.iter().any(|err| err.contains("Unknown field")),
+        "Expected unknown field error, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_object_constructor_rejects_wrong_field_type() {
+    let source = r#"
+object MpcJob:
+  threshold: int64
+
+def main() -> None:
+  var job = MpcJob(threshold: "one")
+"#;
+    let errors = compile_source(source).unwrap_err();
+    assert!(
+        errors.iter().any(|err| err.contains("Type mismatch")),
+        "Expected type mismatch error, got {:?}",
+        errors
+    );
 }
 
 // ===========================================
@@ -349,7 +421,7 @@ object MyData:
   value: int64
   processed: bool
 
-def main() -> nil:
+def main() -> None:
   var n_clients = ClientStore.get_number_clients()
   print("done")
 "#;
@@ -363,7 +435,7 @@ object ComputationState:
   round: int64
   ready: bool
 
-def main() -> nil:
+def main() -> None:
   var party = Mpc.party_id()
   var n = Mpc.n_parties()
   print("done")
@@ -381,9 +453,9 @@ fn test_object_with_nested_list_types() {
 object Matrix:
   rows: int64
   cols: int64
-  data: List[int64]
+  data: list[int64]
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -398,7 +470,7 @@ object SecretA:
 object SecretB:
   value_b: secret int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -409,9 +481,9 @@ fn test_object_field_with_secret_list() {
     let source = r#"
 object SecureContainer:
   count: int64
-  secrets: List[secret int64]
+  secrets: list[secret int64]
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -428,7 +500,7 @@ object Point:
   x: int64
   y: int64
 
-def main() -> nil:
+def main() -> None:
   print("hello")
 "#;
     let result = compile_to_bytecode(source);
@@ -454,7 +526,7 @@ object B:
 object C:
   z: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     let result = compile_to_bytecode(source);
@@ -473,7 +545,7 @@ object Record:
   id: int64
   value: int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -486,7 +558,7 @@ object NumericContainer:
   i64val: int64
   f64val: float
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -499,7 +571,7 @@ object DeepSecret:
   public_count: int64
   secret_data: secret int64
 
-def main() -> nil:
+def main() -> None:
   print("done")
 "#;
     assert!(compile_source(source).is_ok());
@@ -518,7 +590,7 @@ object MPCComputationState:
   threshold: int64
   is_initialized: bool
 
-def main() -> nil:
+def main() -> None:
   var id = Mpc.party_id()
   var n = Mpc.n_parties()
   var t = Mpc.threshold()
@@ -534,7 +606,7 @@ object ClientData:
   client_id: int64
   share_count: int64
 
-def main() -> nil:
+def main() -> None:
   var n_clients = ClientStore.get_number_clients()
   print("Tracking clients")
 "#;
@@ -549,7 +621,7 @@ object ConsensusState:
   is_decided: bool
   proposal_value: int64
 
-def main() -> nil:
+def main() -> None:
   print("Consensus state defined")
 "#;
     assert!(compile_source(source).is_ok());

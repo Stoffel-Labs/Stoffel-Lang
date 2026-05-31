@@ -40,7 +40,7 @@ object PartiallySecret:
 # ==========================================
 
 object Container:
-  items: List[int64]
+  items: list[int64]
   count: int64
 
 # ==========================================
@@ -49,7 +49,7 @@ object Container:
 
 object SecureContainer:
   count: int64
-  secrets: List[secret int64]
+  secrets: list[secret int64]
 
 # ==========================================
 # Multiple Object Definitions
@@ -116,7 +116,7 @@ def create_and_combine_shares() -> int64:
 # Main Entry Point
 # ==========================================
 
-def main() -> nil:
+def main() -> None:
   # Test Mpc methods
   var my_id = Mpc.party_id()
   var n = Mpc.n_parties()
@@ -137,7 +137,7 @@ def main() -> nil:
   Rbc.broadcast("hello world")
 
   # Test Aba methods
-  Aba.propose(true)
+  Aba.propose(True)
 
   # Test byte and crypto helpers
   var msg_bytes = Bytes.from_string("hello")

@@ -7,6 +7,7 @@ example folder has a `main.stfl` source file and a short README.
 
 - `local_control_flow`: loops, ranges, functions, branching, and arithmetic.
 - `local_collections`: list literals, indexing, and `append`/`push`/`len` aliases.
+- `local_nested_generics`: generic functions over nested list shapes.
 - `local_storage`: VM local storage through `LocalStorage`.
 - `local_dynamic_workflow`: dynamic objects, runtime type inspection, arrays, and callbacks.
 - `local_closure_counter`: captured upvalues and stateful closure callbacks.

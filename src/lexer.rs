@@ -76,15 +76,9 @@ fn get_keywords() -> HashMap<String, TokenKind> {
         "return".to_string(),
         TokenKind::Keyword("return".to_string()),
     );
-    keywords.insert("yield".to_string(), TokenKind::Keyword("yield".to_string()));
-    keywords.insert("break".to_string(), TokenKind::Keyword("break".to_string()));
-    keywords.insert(
-        "continue".to_string(),
-        TokenKind::Keyword("continue".to_string()),
-    );
-    keywords.insert("true".to_string(), TokenKind::BoolLiteral(true));
-    keywords.insert("false".to_string(), TokenKind::BoolLiteral(false));
-    keywords.insert("nil".to_string(), TokenKind::NilLiteral);
+    keywords.insert("True".to_string(), TokenKind::BoolLiteral(true));
+    keywords.insert("False".to_string(), TokenKind::BoolLiteral(false));
+    keywords.insert("None".to_string(), TokenKind::NilLiteral);
     keywords.insert(
         "secret".to_string(),
         TokenKind::Keyword("secret".to_string()),

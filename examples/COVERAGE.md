@@ -12,8 +12,8 @@ exercises.
 | Module imports and import aliases | `language_policy_engine` imports `math_rules as rules` |
 | Type aliases and all core scalar type names | `language_policy_engine`, `language_mpc_schemas` |
 | Integer literal widths and suffixes | `language_policy_engine` uses signed and unsigned 8/16/32/64-bit literals |
-| `nil`, `bool`/`boolean`, `float`/`float64`, `bytes` aliases | `language_policy_engine`, `language_mpc_schemas`, crypto and signature examples |
-| Lists, dictionaries, nested generics, indexing, assignment through index | `language_policy_engine`, `language_mpc_schemas`, `local_dynamic_workflow`, `local_collections` |
+| `None`, `bool`, `float`/`float64`, `bytes` aliases | `language_policy_engine`, `language_mpc_schemas`, crypto and signature examples |
+| Lists, dictionaries, nested generics, indexing, assignment through index | `language_policy_engine`, `language_mpc_schemas`, `local_dynamic_workflow`, `local_collections`, `local_nested_generics` |
 | Dynamic objects and runtime field access | `local_dynamic_workflow` |
 | Object schema declarations, base object syntax, secret-typed fields | `language_mpc_schemas` |
 | Secret values and MPC secret flow | `mpc_client_federated_average`, `avss_certificate/sign`, `mpc_share_toolkit` |
@@ -32,8 +32,7 @@ as supported language examples.
 | Builtin surface | Example coverage |
 | --- | --- |
 | `print`, `type` | `local_dynamic_workflow`, `language_mpc_schemas` |
-| `create_array`, `array_push`, `append`, `push`, `array_length`, `length`, `len` | `local_dynamic_workflow`, `local_collections` |
-| `create_object`, `get_field`, `set_field` | `local_dynamic_workflow` |
+| `append`, `len` | `local_dynamic_workflow`, `local_collections`, `local_nested_generics` |
 | `create_closure`, `create_closure_with_upvalue`, `call_closure`, `call_closure_with_arg`, `get_upvalue`, `set_upvalue` | `local_dynamic_workflow`, `local_closure_counter` |
 | `LocalStorage.store`, `load`, `retrieve`, `delete`, `exists` | `local_storage`, `avss_share_auditor` |
 | `LocalStorage.load_share` | `avss_certificate/sign` |

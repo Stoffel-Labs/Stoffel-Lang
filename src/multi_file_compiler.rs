@@ -223,7 +223,8 @@ impl MultiFileCompiler {
         let exports = self.extract_exports(&optimized_ast, &resolved.module_path);
 
         // Code generation
-        let program = codegen::generate_bytecode(&optimized_ast).map_err(|e| vec![e])?;
+        let mut program = codegen::generate_bytecode(&optimized_ast).map_err(|e| vec![e])?;
+        program.client_io_manifest.mpc_backend = self.options.mpc_backend;
 
         Ok((program, exports))
     }
@@ -257,6 +258,7 @@ impl MultiFileCompiler {
             }
             AstNode::FunctionDefinition {
                 name: Some(name),
+                type_params,
                 parameters,
                 return_type,
                 ..
@@ -267,14 +269,14 @@ impl MultiFileCompiler {
                     .map(|p| {
                         p.type_annotation
                             .as_ref()
-                            .map(|t| SymbolType::from_ast(t))
+                            .map(|t| SymbolType::from_ast_with_type_params(t, type_params))
                             .unwrap_or(SymbolType::Unknown)
                     })
                     .collect();
 
                 let ret_type = return_type
                     .as_ref()
-                    .map(|t| SymbolType::from_ast(t))
+                    .map(|t| SymbolType::from_ast_with_type_params(t, type_params))
                     .unwrap_or(SymbolType::Void);
 
                 exports

@@ -3,6 +3,8 @@ use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction};
 use crate::errors::{CompilerError, CompilerResult};
 use crate::register_allocator::{self, AllocationError, PhysicalRegister, VirtualRegister};
 use crate::symbol_table::SymbolType;
+use stoffel_vm_types::compiled_binary::{ClientIoManifest, ClientIoSchema, MpcBackend};
+use stoffel_vm_types::core_types::ShareType;
 use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 
 use std::collections::HashMap;
@@ -12,6 +14,34 @@ const MAX_REGISTERS: usize = SECRET_REGISTER_START * 2;
 
 /// It receives the generator state, the function definition node, and the pragma node.
 type PragmaHandler = fn(&mut CodeGenerator, &AstNode, &Pragma) -> CompilerResult<()>;
+
+fn int_literal_u64(node: Option<&AstNode>) -> Option<u64> {
+    match node {
+        Some(AstNode::Literal(crate::ast::Value::Int { value, .. })) => u64::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+fn infer_single_share_type(node: &AstNode) -> Option<ShareType> {
+    match node {
+        AstNode::FunctionCall { function, .. } => match function.as_ref() {
+            AstNode::Identifier(name, _) if name == "ClientStore.take_share_fixed" => {
+                Some(ShareType::default_secret_fixed_point())
+            }
+            AstNode::Identifier(name, _) if name == "ClientStore.take_share" => {
+                Some(ShareType::default_secret_int())
+            }
+            AstNode::Identifier(name, _) if name.ends_with("from_clear_fixed") => {
+                Some(ShareType::default_secret_fixed_point())
+            }
+            AstNode::Identifier(name, _) if name.ends_with("from_clear_int") => {
+                Some(ShareType::default_secret_int())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 #[derive(Debug)]
 struct CodeGenerator {
@@ -39,6 +69,10 @@ struct CodeGenerator {
     pragma_handlers: HashMap<String, PragmaHandler>,
     // Constants identified during code generation for this chunk.
     identified_constants: Vec<Constant>,
+    client_inputs: HashMap<u64, Vec<Option<ShareType>>>,
+    client_outputs: HashMap<u64, Vec<ShareType>>,
+    variable_share_types: HashMap<String, ShareType>,
+    variable_share_lists: HashMap<String, Vec<ShareType>>,
 }
 
 impl CodeGenerator {
@@ -59,6 +93,10 @@ impl CodeGenerator {
             known_builtins,
             pragma_handlers: Self::register_pragma_handlers(),
             identified_constants: Vec::new(),
+            client_inputs: HashMap::new(),
+            client_outputs: HashMap::new(),
+            variable_share_types: HashMap::new(),
+            variable_share_lists: HashMap::new(),
         }
     }
 
@@ -84,6 +122,173 @@ impl CodeGenerator {
     /// Adds an instruction to the current temporary list.
     fn emit(&mut self, instruction: Instruction) {
         self.current_instructions.push(instruction);
+    }
+
+    fn record_client_io_call(&mut self, function_name: &str, arguments: &[AstNode]) {
+        match function_name {
+            "ClientStore.take_share" | "ClientStore.take_share_fixed" => {
+                let Some(client_slot) = int_literal_u64(arguments.first()) else {
+                    return;
+                };
+                let Some(input_ordinal) = int_literal_u64(arguments.get(1)) else {
+                    return;
+                };
+                let share_type = if function_name == "ClientStore.take_share_fixed" {
+                    ShareType::default_secret_fixed_point()
+                } else {
+                    ShareType::default_secret_int()
+                };
+                let inputs = self.client_inputs.entry(client_slot).or_default();
+                let ordinal = input_ordinal as usize;
+                if inputs.len() <= ordinal {
+                    inputs.resize(ordinal + 1, None);
+                }
+                inputs[ordinal] = Some(share_type);
+            }
+            "MpcOutput.send_to_client" => {
+                let Some(client_slot) = int_literal_u64(arguments.first()) else {
+                    return;
+                };
+                if let Some(value) = arguments.get(1) {
+                    let outputs = self.output_share_types_for_node(value);
+                    self.client_outputs
+                        .entry(client_slot)
+                        .or_default()
+                        .extend(outputs);
+                }
+            }
+            "send_to_client" => {
+                let Some(client_slot) = int_literal_u64(arguments.get(1)) else {
+                    return;
+                };
+                let share_type = arguments
+                    .first()
+                    .and_then(|argument| self.share_type_for_node(argument))
+                    .unwrap_or_else(ShareType::default_secret_int);
+                self.client_outputs
+                    .entry(client_slot)
+                    .or_default()
+                    .push(share_type);
+            }
+            _ => {}
+        }
+    }
+
+    fn share_type_for_node(&self, node: &AstNode) -> Option<ShareType> {
+        match node {
+            AstNode::Identifier(name, _) => self.variable_share_types.get(name).copied(),
+            AstNode::FunctionCall { .. } => infer_single_share_type(node),
+            AstNode::BinaryOperation { left, right, .. } => {
+                let left = self.share_type_for_node(left);
+                let right = self.share_type_for_node(right);
+                match (left, right) {
+                    (
+                        Some(ShareType::SecretFixedPoint { precision }),
+                        Some(ShareType::SecretFixedPoint { .. }),
+                    )
+                    | (
+                        Some(ShareType::SecretFixedPoint { precision }),
+                        Some(ShareType::SecretInt { .. }),
+                    )
+                    | (
+                        Some(ShareType::SecretInt { .. }),
+                        Some(ShareType::SecretFixedPoint { precision }),
+                    ) => Some(ShareType::SecretFixedPoint { precision }),
+                    (Some(left), _) => Some(left),
+                    (_, Some(right)) => Some(right),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn output_share_types_for_node(&self, node: &AstNode) -> Vec<ShareType> {
+        match node {
+            AstNode::Identifier(name, _) => self
+                .variable_share_lists
+                .get(name)
+                .cloned()
+                .or_else(|| {
+                    self.variable_share_types
+                        .get(name)
+                        .copied()
+                        .map(|ty| vec![ty])
+                })
+                .unwrap_or_else(|| vec![ShareType::default_secret_int()]),
+            AstNode::ListLiteral(elements) => elements
+                .iter()
+                .map(|element| {
+                    self.share_type_for_node(element)
+                        .unwrap_or_else(ShareType::default_secret_int)
+                })
+                .collect(),
+            _ => vec![self
+                .share_type_for_node(node)
+                .unwrap_or_else(ShareType::default_secret_int)],
+        }
+    }
+
+    fn client_io_manifest(&self) -> ClientIoManifest {
+        let mut slots = self
+            .client_inputs
+            .keys()
+            .chain(self.client_outputs.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        slots.sort_unstable();
+        slots.dedup();
+
+        ClientIoManifest {
+            mpc_backend: MpcBackend::default(),
+            clients: slots
+                .into_iter()
+                .map(|client_slot| {
+                    let inputs = self
+                        .client_inputs
+                        .get(&client_slot)
+                        .map(|inputs| {
+                            inputs
+                                .iter()
+                                .map(|share_type| {
+                                    share_type.unwrap_or_else(ShareType::default_secret_int)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let outputs = self
+                        .client_outputs
+                        .get(&client_slot)
+                        .cloned()
+                        .unwrap_or_default();
+                    ClientIoSchema {
+                        client_slot,
+                        inputs,
+                        outputs,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn merge_client_io_from(&mut self, other: &CodeGenerator) {
+        for (client_slot, inputs) in &other.client_inputs {
+            let target = self.client_inputs.entry(*client_slot).or_default();
+            if target.len() < inputs.len() {
+                target.resize(inputs.len(), None);
+            }
+            for (idx, share_type) in inputs.iter().enumerate() {
+                if share_type.is_some() {
+                    target[idx] = *share_type;
+                }
+            }
+        }
+        for (client_slot, outputs) in &other.client_outputs {
+            self.client_outputs
+                .entry(*client_slot)
+                .or_default()
+                .extend(outputs.iter().copied());
+        }
     }
 
     /// Adds a label pointing to the *next* instruction index.
@@ -219,6 +424,24 @@ impl CodeGenerator {
                     declared_type
                 };
                 let explicit_secret = final_type.uses_secret_register();
+                let value_share_type = value
+                    .as_deref()
+                    .and_then(|expr| self.share_type_for_node(expr));
+                let value_share_list = value.as_deref().and_then(|expr| match expr {
+                    AstNode::ListLiteral(elements) => Some(
+                        elements
+                            .iter()
+                            .map(|element| {
+                                self.share_type_for_node(element)
+                                    .unwrap_or_else(ShareType::default_secret_int)
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    AstNode::Identifier(identifier, _) => {
+                        self.variable_share_lists.get(identifier).cloned()
+                    }
+                    _ => None,
+                });
 
                 let (value_vr, value_is_secret) = match value {
                     Some(val_expr) => {
@@ -240,6 +463,16 @@ impl CodeGenerator {
                 // Store the variable name and its register in the symbol table.
                 self.symbol_table.insert(name.clone(), value_vr.0);
                 self.symbol_types.insert(name.clone(), final_type);
+                if let Some(share_types) = value_share_list {
+                    self.variable_share_lists.insert(name.clone(), share_types);
+                    self.variable_share_types.remove(name);
+                } else if let Some(share_type) = value_share_type {
+                    self.variable_share_types.insert(name.clone(), share_type);
+                    self.variable_share_lists.remove(name);
+                } else {
+                    self.variable_share_types.remove(name);
+                    self.variable_share_lists.remove(name);
+                }
                 // Update vr_secrecy map for this VR to ensure it has the correct flag
                 self.vr_secrecy.insert(value_vr, value_is_secret);
 
@@ -470,6 +703,51 @@ impl CodeGenerator {
                 location: _,
                 resolved_return_type,
             } => {
+                if let (
+                    AstNode::Identifier(function_name, _),
+                    Some(SymbolType::Object(object_name)),
+                ) = (function.as_ref(), resolved_return_type.as_ref())
+                {
+                    if function_name == object_name
+                        && arguments
+                            .iter()
+                            .all(|arg| matches!(arg, AstNode::NamedArgument { .. }))
+                    {
+                        self.emit(Instruction::CALL("create_object".to_string()));
+
+                        let obj_vr = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(obj_vr.0, 0));
+
+                        for arg in arguments {
+                            let AstNode::NamedArgument {
+                                name: field_name,
+                                value,
+                                ..
+                            } = arg
+                            else {
+                                unreachable!("constructor arguments were checked above");
+                            };
+
+                            let (value_vr, _value_is_secret) = self.compile_node(value)?;
+
+                            let field_const = Constant::String(field_name.clone());
+                            self.identified_constants.push(field_const.clone());
+                            let field_vr = self.allocate_virtual_register(false);
+                            self.emit(Instruction::LDI(
+                                field_vr.0,
+                                crate::core_types::Value::from(field_const),
+                            ));
+
+                            self.emit(Instruction::PUSHARG(obj_vr.0));
+                            self.emit(Instruction::PUSHARG(field_vr.0));
+                            self.emit(Instruction::PUSHARG(value_vr.0));
+                            self.emit(Instruction::CALL("set_field".to_string()));
+                        }
+
+                        return Ok((obj_vr, false));
+                    }
+                }
+
                 // 1. Identify the function name
                 // Semantic analysis already verified the function exists and is callable.
                 let raw_function_name =
@@ -487,6 +765,8 @@ impl CodeGenerator {
                     .vm_symbol_for_call(&raw_function_name)
                     .map(str::to_string)
                     .unwrap_or(raw_function_name);
+
+                self.record_client_io_call(&function_name, arguments);
 
                 // 3. Compile arguments first (do NOT emit PUSHARG yet) to keep PUSHARGs contiguous before CALL
                 let mut arg_vrs = Vec::with_capacity(arguments.len());
@@ -516,6 +796,10 @@ impl CodeGenerator {
 
                 Ok((result_vr, result_is_secret)) // Return the VR holding the result
             }
+            AstNode::NamedArgument { location, .. } => Err(CompilerError::internal_error(format!(
+                "Codegen received named argument outside object constructor at {}:{}",
+                location.line, location.column
+            ))),
             AstNode::IfExpression {
                 condition,
                 then_branch,
@@ -862,6 +1146,7 @@ impl CodeGenerator {
             }
             AstNode::FunctionDefinition {
                 name,
+                type_params,
                 parameters,
                 return_type: _,
                 body,
@@ -903,7 +1188,7 @@ impl CodeGenerator {
                     let param_type = param
                         .type_annotation
                         .as_ref()
-                        .map(|n| SymbolType::from_ast(n))
+                        .map(|n| SymbolType::from_ast_with_type_params(n, type_params))
                         .unwrap_or(SymbolType::Unknown);
                     let param_is_secret = param_type.uses_secret_register();
                     // Allocate a virtual register for the parameter. These will typically
@@ -919,6 +1204,7 @@ impl CodeGenerator {
 
                 // Compile the function body using the new generator.
                 let (_body_result_reg, _body_is_secret) = function_generator.compile_node(body)?;
+                self.merge_client_io_from(&function_generator);
 
                 // --- Perform Register Allocation ---
                 let virtual_instructions = function_generator.current_instructions;
@@ -1127,6 +1413,8 @@ impl CodeGenerator {
 
     /// Finalizes the entire compiled program, including the main chunk and all function chunks.
     fn finalize_program(mut self) -> CompilerResult<CompiledProgram> {
+        let client_io_manifest = self.client_io_manifest();
+
         // If both an explicit entry and `def main` exist, error clearly.
         if self.entry_main_chunk.is_some() && self.main_proc_chunk.is_some() {
             return Err(CompilerError::semantic_error(
@@ -1148,6 +1436,7 @@ impl CodeGenerator {
             return Ok(CompiledProgram {
                 main_chunk: entry_chunk,
                 function_chunks: self.compiled_functions,
+                client_io_manifest,
             });
         }
         // `def main(...)` is an entry chunk and cannot be mixed with top-level code.
@@ -1156,6 +1445,7 @@ impl CodeGenerator {
                 return Ok(CompiledProgram {
                     main_chunk: main_proc,
                     function_chunks: self.compiled_functions,
+                    client_io_manifest,
                 });
             } else {
                 return Err(CompilerError::semantic_error(
@@ -1214,6 +1504,7 @@ impl CodeGenerator {
         Ok(CompiledProgram {
             main_chunk,
             function_chunks: self.compiled_functions,
+            client_io_manifest,
         })
     }
 }
@@ -1313,6 +1604,7 @@ fn collect_upvalue_names(node: &AstNode) -> Vec<String> {
                 visit(right, out);
             }
             AstNode::UnaryOperation { operand, .. } => visit(operand, out),
+            AstNode::NamedArgument { value, .. } => visit(value, out),
             AstNode::FieldAccess { object, .. } => visit(object, out),
             AstNode::IndexAccess { base, index, .. } => {
                 visit(base, out);

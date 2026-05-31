@@ -46,6 +46,15 @@ pub struct BuiltinObjectInfo {
     pub methods: HashMap<String, ObjectMethodInfo>,
 }
 
+/// Information about a user-defined object type.
+#[derive(Debug, Clone)]
+pub struct UserObjectInfo {
+    /// The name of the object type
+    pub name: String,
+    /// Field types keyed by field name, including inherited fields.
+    pub fields: HashMap<String, SymbolType>,
+}
+
 /// Represents the type of a symbol (primitive or user-defined)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolType {
@@ -66,6 +75,7 @@ pub enum SymbolType {
     Void, // For functions returning nothing
     Secret(Box<SymbolType>),
     TypeName(String), // For user-defined types
+    TypeVar(String),  // Declared generic type parameter
     Unknown,          // Placeholder during analysis
     // Collection types
     List(Box<SymbolType>),                  // List[T]
@@ -227,6 +237,10 @@ impl SymbolType {
     /// Creates a SymbolType from an AST node representing a type annotation.
     /// This is a simplified version.
     pub fn from_ast(node: &AstNode) -> Self {
+        Self::from_ast_with_type_params(node, &[])
+    }
+
+    pub fn from_ast_with_type_params(node: &AstNode, type_params: &[String]) -> Self {
         match node {
             AstNode::Identifier(name, _) => match name.as_str() {
                 // Signed ints (aliases)
@@ -242,35 +256,42 @@ impl SymbolType {
                 // Other primitives
                 "float" | "float64" | "f64" => SymbolType::Float,
                 "string" => SymbolType::String,
-                "bool" | "boolean" => SymbolType::Bool,
+                "bool" => SymbolType::Bool,
                 "bytes" | "ByteArray" => SymbolType::List(Box::new(SymbolType::UInt8)),
                 "void" => SymbolType::Void, // Assuming 'void' keyword exists or is inferred
-                "nil" => SymbolType::Nil,
-                "unknown" | "any" => SymbolType::Unknown,
+                "None" => SymbolType::Nil,
+                _ if type_params.iter().any(|param| param == name) => {
+                    SymbolType::TypeVar(name.clone())
+                }
                 _ => crate::builtin_registry::resolve_builtin_type_name(name)
                     .unwrap_or_else(|| SymbolType::TypeName(name.clone())),
             },
-            AstNode::SecretType(inner_node) => {
-                SymbolType::Secret(Box::new(SymbolType::from_ast(inner_node)))
-            }
-            AstNode::ListType(element_type) => {
-                SymbolType::List(Box::new(SymbolType::from_ast(element_type)))
-            }
+            AstNode::SecretType(inner_node) => SymbolType::Secret(Box::new(
+                SymbolType::from_ast_with_type_params(inner_node, type_params),
+            )),
+            AstNode::ListType(element_type) => SymbolType::List(Box::new(
+                SymbolType::from_ast_with_type_params(element_type, type_params),
+            )),
             AstNode::DictType {
                 key_type,
                 value_type,
                 ..
             } => SymbolType::Dict(
-                Box::new(SymbolType::from_ast(key_type)),
-                Box::new(SymbolType::from_ast(value_type)),
+                Box::new(SymbolType::from_ast_with_type_params(key_type, type_params)),
+                Box::new(SymbolType::from_ast_with_type_params(
+                    value_type,
+                    type_params,
+                )),
             ),
             AstNode::GenericType {
                 base_name,
-                type_params,
+                type_params: generic_args,
                 ..
             } => {
-                let params: Vec<SymbolType> =
-                    type_params.iter().map(SymbolType::from_ast).collect();
+                let params: Vec<SymbolType> = generic_args
+                    .iter()
+                    .map(|node| SymbolType::from_ast_with_type_params(node, type_params))
+                    .collect();
                 SymbolType::Generic(base_name.clone(), params)
             }
             _ => SymbolType::Unknown, // Cannot determine type from this node
@@ -292,13 +313,14 @@ impl fmt::Display for SymbolType {
             SymbolType::Float => write!(f, "float"),
             SymbolType::String => write!(f, "string"),
             SymbolType::Bool => write!(f, "bool"),
-            SymbolType::Nil => write!(f, "nil"),
+            SymbolType::Nil => write!(f, "None"),
             SymbolType::Void => write!(f, "void"),
             SymbolType::Secret(inner) => write!(f, "secret {}", inner),
             SymbolType::TypeName(name) => write!(f, "{}", name),
+            SymbolType::TypeVar(name) => write!(f, "{}", name),
             SymbolType::Unknown => write!(f, "<unknown>"),
-            SymbolType::List(elem) => write!(f, "List[{}]", elem),
-            SymbolType::Dict(key, val) => write!(f, "Dict[{}, {}]", key, val),
+            SymbolType::List(elem) => write!(f, "list[{}]", elem),
+            SymbolType::Dict(key, val) => write!(f, "dict[{}, {}]", key, val),
             SymbolType::Object(name) => write!(f, "{}", name),
             SymbolType::Generic(name, params) => {
                 write!(f, "{}[", name)?;
@@ -381,6 +403,8 @@ pub struct SymbolTable {
     pub errors: Vec<(SymbolDeclarationError, SourceLocation)>, // Store error and location of the failed declaration
     /// Registry of builtin object types (like ClientStore)
     pub builtin_objects: HashMap<String, BuiltinObjectInfo>,
+    /// Registry of user-defined object types.
+    pub user_objects: HashMap<String, UserObjectInfo>,
     /// Method-to-function suggestions for common method names that should be functions.
     /// Maps method name (e.g., "length") to suggestion string (e.g., "array_length(arr)").
     method_suggestions: HashMap<String, String>,
@@ -400,6 +424,7 @@ impl SymbolTable {
             next_scope_id: 1, // 0 is global scope
             errors: Vec::new(),
             builtin_objects: HashMap::new(),
+            user_objects: HashMap::new(),
             method_suggestions: HashMap::new(),
         };
         // Create the global scope (ID 0)
@@ -419,6 +444,16 @@ impl SymbolTable {
         self.builtin_objects.get(name)
     }
 
+    /// Registers a user-defined object type for constructor and field checks.
+    pub fn register_user_object(&mut self, info: UserObjectInfo) {
+        self.user_objects.insert(info.name.clone(), info);
+    }
+
+    /// Looks up a user-defined object type by name.
+    pub fn lookup_user_object(&self, name: &str) -> Option<&UserObjectInfo> {
+        self.user_objects.get(name)
+    }
+
     /// Looks up a method on a builtin object type
     pub fn lookup_builtin_method(
         &self,
@@ -428,6 +463,28 @@ impl SymbolTable {
         self.builtin_objects
             .get(object_name)
             .and_then(|obj| obj.methods.get(method_name))
+    }
+
+    /// Looks up a builtin method by receiver type and source method name.
+    ///
+    /// A method is receiver-bound when its first declared parameter is the
+    /// object type that owns the method, e.g. `Share.open(share: Share)`.
+    pub fn lookup_builtin_method_for_receiver(
+        &self,
+        receiver_type: &SymbolType,
+        method_name: &str,
+    ) -> Option<&ObjectMethodInfo> {
+        let SymbolType::Object(receiver_name) = receiver_type.underlying_type() else {
+            return None;
+        };
+
+        let method = self.lookup_builtin_method(receiver_name, method_name)?;
+        let first_param = method.parameters.first()?;
+
+        match first_param.underlying_type() {
+            SymbolType::Object(param_name) if param_name == receiver_name => Some(method),
+            _ => None,
+        }
     }
 
     fn declare_global_builtin(&mut self, info: SymbolInfo) {
@@ -642,9 +699,9 @@ mod tests {
         let table = SymbolTable::new();
         // New table has builtins but no user symbols at global scope
         let symbols = table.get_visible_symbol_names();
-        // Should include builtin functions like "print", "create_array", etc.
+        // Should include public builtin functions like "print" and "append".
         assert!(symbols.contains(&"print".to_string()));
-        assert!(symbols.contains(&"create_array".to_string()));
+        assert!(symbols.contains(&"append".to_string()));
     }
 
     #[test]
@@ -726,9 +783,8 @@ mod tests {
 
         // Should include builtin functions
         assert!(callables.contains(&"print".to_string()));
-        assert!(callables.contains(&"create_array".to_string()));
-        assert!(callables.contains(&"array_push".to_string()));
-        assert!(callables.contains(&"array_length".to_string()));
+        assert!(callables.contains(&"append".to_string()));
+        assert!(callables.contains(&"len".to_string()));
     }
 
     #[test]
@@ -1123,6 +1179,7 @@ mod tests {
             "get_type",
             "get_party_id",
             "batch_open",
+            "batch_open_fixed",
             "open_exp",
             "random",
             "get_commitment",
@@ -1285,5 +1342,19 @@ mod tests {
             SymbolType::List(_) => (),
             _ => panic!("batch_open should return a List type"),
         }
+
+        let batch_open_fixed = table
+            .lookup_builtin_method("Share", "batch_open_fixed")
+            .unwrap();
+        assert_eq!(
+            batch_open_fixed.parameters,
+            vec![SymbolType::List(Box::new(SymbolType::Object(
+                "Share".to_string()
+            )))]
+        );
+        assert_eq!(
+            batch_open_fixed.return_type,
+            SymbolType::List(Box::new(SymbolType::TypeVar("T".to_string())))
+        );
     }
 }

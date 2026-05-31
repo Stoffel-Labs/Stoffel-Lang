@@ -1,7 +1,7 @@
 # Invalid example: trying to assign ClientStore.take_share to non-Share variables
 # This should cause compiler errors
 
-def main() -> nil:
+def main() -> None:
   # ERROR: Cannot assign take_share result to int64
   var share1: int64 = ClientStore.take_share(0, 0)
 

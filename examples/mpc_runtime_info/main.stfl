@@ -36,7 +36,7 @@ def main() -> int64:
 
   if client_count > 0 and Mpc.has_capability("client-output"):
     var score_share = Share.from_clear(score)
-    var output_shares: List[Share] = [score_share]
-    discard MpcOutput.send_to_client(0, output_shares)
+    var output_shares: list[Share] = [score_share]
+    MpcOutput.send_to_client(0, output_shares)
 
   return score

@@ -1,7 +1,7 @@
 import std.mpc
 import std.crypto
 
-def main() -> nil:
+def main() -> None:
   var share = Share.random()
   var message = Bytes.from_string("hello")
   var digest = Crypto.sha256(message)

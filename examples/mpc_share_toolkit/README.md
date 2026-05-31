@@ -7,5 +7,5 @@ field, random, and open-in-exponent builtins.
 
 Run it under a configured MPC runtime. Some operations depend on backend
 capabilities such as multiplication, client output, commitments, and
-open-in-exponent. The share batch is typed as `List[Share]`, so this also
+open-in-exponent. The share batch is typed as `list[Share]`, so this also
 serves as the broad strict-Share API example.

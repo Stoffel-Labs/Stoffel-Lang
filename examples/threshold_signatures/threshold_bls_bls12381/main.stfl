@@ -5,14 +5,14 @@
 def main() -> bytes:
   var client_count = ClientStore.get_number_clients()
   var secret_key = Share.random()
-  var public_key = Share.open_exp(secret_key, "bls12-381-g2")
+  var public_key = secret_key.open_exp("bls12-381-g2")
 
   var message = Bytes.from_string("test message for bls")
   if client_count > 0:
     var message_share = ClientStore.take_share(0, 0)
-    message = Share.open_field(message_share)
+    message = message_share.open_field()
   var hashed_message = Crypto.hash_to_g1(message)
-  var signature = Share.open_exp_custom(secret_key, hashed_message)
+  var signature = secret_key.open_exp_custom(hashed_message)
 
   var signature_and_key = Bytes.concat(signature, public_key)
   return Bytes.concat(signature_and_key, hashed_message)

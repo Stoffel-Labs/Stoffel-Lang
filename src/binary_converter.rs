@@ -12,7 +12,7 @@ use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction};
 use std::collections::HashMap;
 use std::path::Path;
 use stoffel_vm_types::compiled_binary::{
-    BinaryResult, CompiledBinary, CompiledFunction, CompiledInstruction,
+    BinaryResult, ClientIoManifest, CompiledBinary, CompiledFunction, CompiledInstruction,
 };
 use stoffel_vm_types::core_types::Value;
 use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
@@ -35,6 +35,7 @@ pub fn convert_to_binary(program: &CompiledProgram) -> CompiledBinary {
         version: stoffel_vm_types::compiled_binary::FORMAT_VERSION,
         constants: Vec::new(),
         functions: Vec::new(),
+        client_io_manifest: ClientIoManifest::default(),
     };
 
     // Maps for tracking constants and functions
@@ -79,6 +80,7 @@ pub fn convert_to_binary(program: &CompiledProgram) -> CompiledBinary {
         binary.functions.push(function);
     }
 
+    binary.client_io_manifest = program.client_io_manifest.clone();
     binary
 }
 
@@ -499,6 +501,11 @@ pub fn disassemble(binary: &CompiledBinary) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "; Stoffel Disassembly");
     let _ = writeln!(out, "; Format version: {}", binary.version);
+    let _ = writeln!(
+        out,
+        "; MPC backend: {:?}",
+        binary.client_io_manifest.mpc_backend
+    );
     let _ = writeln!(out);
 
     // Constants

@@ -12,5 +12,5 @@ def main() -> bytes:
     discard LocalStorage.store(storage_key, Share.random())
 
   var secret_key: Share = LocalStorage.load_share(storage_key)
-  var public_key = Share.get_commitment(secret_key, 0)
+  var public_key = secret_key.get_commitment(0)
   return Crypto.point_to_sec1(public_key, Mpc.curve())

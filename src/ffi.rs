@@ -5,6 +5,7 @@ use std::ptr;
 use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant};
 use crate::compiler::{compile, CompilerOptions};
 use crate::errors::CompilerError;
+use stoffel_vm_types::compiled_binary::MpcBackend;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -20,6 +21,7 @@ impl From<CCompilerOptions> for CompilerOptions {
             optimize: c_options.optimize != 0,
             optimization_level: c_options.optimization_level,
             print_ir: c_options.print_ir != 0,
+            mpc_backend: MpcBackend::default(),
         }
     }
 }

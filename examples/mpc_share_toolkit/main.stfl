@@ -5,44 +5,44 @@ def main() -> int64:
   var fixed_weight = Share.from_clear_fixed(1.25, 64, 16)
   var random_mask = Share.random()
 
-  var score = Share.add(base, adjustment)
-  score = Share.sub(score, Share.from_clear_int(5, 64))
-  score = Share.add_scalar(score, 9)
-  score = Share.mul_scalar(score, 2)
-  score = Share.add(score, Share.neg(Share.from_clear_int(-3, 64)))
+  var score = base.add(adjustment)
+  score = score.sub(Share.from_clear_int(5, 64))
+  score = score.add_scalar(9)
+  score = score.mul_scalar(2)
+  score = score.add(Share.from_clear_int(-3, 64).neg())
 
   if Mpc.has_capability("multiplication"):
-    score = Share.mul(score, Share.from_clear_int(1, 64))
+    score = score.mul(Share.from_clear_int(1, 64))
 
   discard fixed_weight
   discard random_mask
 
-  var batch: List[Share] = [base, adjustment, score]
+  var batch: list[Share] = [base, adjustment, score]
   discard Share.batch_open(batch)
-  discard Share.open_fixed(Share.from_clear_fixed(2.5, 64, 16))
-  discard Share.get_type(score)
-  discard Share.get_party_id(score)
+  discard Share.from_clear_fixed(2.5, 64, 16).open_fixed()
+  discard score.get_type()
+  discard score.get_party_id()
 
-  if Share.has_commitments(score):
-    discard Share.get_commitment(score, 0)
+  if score.has_commitments():
+    discard score.get_commitment(0)
 
-  discard Share.commitment_count(score)
+  discard score.commitment_count()
 
   if client_count > 0 and Mpc.has_capability("client-output"):
-    discard Share.send_to_client(score, 0)
+    score.send_to_client(0)
     if client_count > 1:
-      var output_shares: List[Share] = [score]
-      discard MpcOutput.send_to_client(1, output_shares)
+      var output_shares: list[Share] = [score]
+      MpcOutput.send_to_client(1, output_shares)
 
   if Mpc.has_capability("field-arithmetic"):
     var field_element = Mpc.rand()
-    var field_score = Share.mul_field(score, field_element)
-    discard Share.open_field(field_score)
+    var field_score = score.mul_field(field_element)
+    discard field_score.open_field()
 
   if Mpc.has_capability("open-in-exponent"):
-    discard Share.open_exp(score, "bls12-381-g1")
+    discard score.open_exp("bls12-381-g1")
     var custom_generator = Crypto.hash_to_g1(Bytes.from_string("toolkit-generator"))
-    discard Share.open_exp_custom(score, custom_generator)
+    discard score.open_exp_custom(custom_generator)
 
   discard Mpc.rand_int(64)
-  return Share.open(score)
+  return score.open()

@@ -48,6 +48,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // Checks if the next token matches the expected kind without consuming it.
+    fn check_next(&mut self, kind: &TokenKind) -> bool {
+        self.tokens
+            .peek()
+            .is_some_and(|info| mem::discriminant(&info.kind) == mem::discriminant(kind))
+    }
+
     // Checks if the current token is a specific keyword.
     fn check_keyword(&self, keyword: &str) -> bool {
         matches!(self.current_token_info, Some(TokenInfo { kind: TokenKind::Keyword(k), .. }) if k == keyword)
@@ -192,6 +199,7 @@ impl<'a> Parser<'a> {
                 )
                 .with_hint("Use 'def main(...)' instead")),
                 "builtin" => self.parse_builtin_declaration(),
+                "type" if self.check_next(&TokenKind::LParen) => self.parse_expression_statement(),
                 "type" | "object" | "enum" => self.parse_type_definition(),
                 "secret" => Err(CompilerError::syntax_error(
                     "The 'secret' descriptor is only valid in type annotations",
@@ -276,6 +284,37 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let mut type_params = Vec::new();
+        if self.check(&TokenKind::LBracket) {
+            self.advance(); // consume '['
+            if !self.check(&TokenKind::RBracket) {
+                loop {
+                    let param_name_token = self.consume(
+                        &TokenKind::Identifier("".to_string()),
+                        "Expected generic type parameter name",
+                    )?;
+                    let param_name = match param_name_token {
+                        TokenInfo {
+                            kind: TokenKind::Identifier(n),
+                            ..
+                        } => n.clone(),
+                        _ => unreachable!(),
+                    };
+                    if !type_params.contains(&param_name) {
+                        type_params.push(param_name);
+                    }
+                    if self.check(&TokenKind::RBracket) {
+                        break;
+                    }
+                    self.consume(&TokenKind::Comma, "Expected ',' between generic parameters")?;
+                }
+            }
+            self.consume(
+                &TokenKind::RBracket,
+                "Expected ']' after generic parameters",
+            )?;
+        }
+
         self.consume(&TokenKind::LParen, "Expected '(' after function name")?;
         let mut parameters = Vec::new();
         if !self.check(&TokenKind::RParen) {
@@ -332,7 +371,7 @@ impl<'a> Parser<'a> {
                 ).with_hint("Return a single value. If you need multiple values, consider using a custom type or restructuring your code."));
             }
 
-            // Special-case: allow 'nil' to mean no return (void)
+            // Special-case: allow 'None' to mean no return (void)
             if matches!(
                 self.current_token_info,
                 Some(TokenInfo {
@@ -341,7 +380,7 @@ impl<'a> Parser<'a> {
                 })
             ) {
                 // Treat as no return type
-                self.advance(); // consume 'nil'
+                self.advance(); // consume 'None'
                 return_type = None;
             } else {
                 return_type = Some(Box::new(self.parse_type_annotation()?));
@@ -369,6 +408,7 @@ impl<'a> Parser<'a> {
 
         Ok(AstNode::FunctionDefinition {
             name: Some(name),
+            type_params,
             parameters,
             return_type,
             body: Box::new(body),
@@ -481,7 +521,7 @@ impl<'a> Parser<'a> {
                 ..
             }) => {
                 self.advance();
-                "nil".to_string()
+                "None".to_string()
             }
             _ => {
                 return Err(CompilerError::syntax_error(
@@ -1129,13 +1169,26 @@ impl<'a> Parser<'a> {
                 // This is a function call: left(arg1, arg2, ...)
                 self.advance(); // Consume '('
                 let mut arguments = Vec::new();
+                self.skip_call_layout();
                 if !self.check(&TokenKind::RParen) {
                     loop {
-                        arguments.push(self.parse_expression()?);
+                        arguments.push(self.parse_call_argument()?);
+                        self.skip_call_layout();
+                        if self.check(&TokenKind::Comma) {
+                            self.advance(); // Consume ','
+                            self.skip_call_layout();
+                            if self.check(&TokenKind::RParen) {
+                                break;
+                            }
+                            continue;
+                        }
                         if self.check(&TokenKind::RParen) {
                             break;
                         }
-                        self.consume(&TokenKind::Comma, "Expected ',' or ')' after function argument")?;
+                        self.consume(
+                            &TokenKind::Comma,
+                            "Expected ',' or ')' after function argument",
+                        )?;
                     }
                 }
                 self.consume(&TokenKind::RParen, "Expected ')' after function arguments")?;
@@ -1177,6 +1230,41 @@ impl<'a> Parser<'a> {
             _ => Err(CompilerError::syntax_error(
                 format!("Expected infix operator, function call '(', field access '.', or index access '[', found {:?}", token_info.kind),
                 token_info.location.clone())),
+        }
+    }
+
+    fn parse_call_argument(&mut self) -> CompilerResult<AstNode> {
+        if matches!(
+            self.current_token_info,
+            Some(TokenInfo {
+                kind: TokenKind::Identifier(_),
+                ..
+            })
+        ) && self.check_next(&TokenKind::Colon)
+        {
+            let name_token = self.advance().unwrap();
+            let name = match &name_token.kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => unreachable!(),
+            };
+            self.consume(&TokenKind::Colon, "Expected ':' after named argument")?;
+            let value = self.parse_expression()?;
+            return Ok(AstNode::NamedArgument {
+                name,
+                value: Box::new(value),
+                location: name_token.location.clone(),
+            });
+        }
+
+        self.parse_expression()
+    }
+
+    fn skip_call_layout(&mut self) {
+        while self.check(&TokenKind::Newline)
+            || self.check(&TokenKind::Indent)
+            || self.check(&TokenKind::Dedent)
+        {
+            self.advance();
         }
     }
 
@@ -1336,24 +1424,24 @@ impl<'a> Parser<'a> {
                     self.advance(); // Consume '['
 
                     match base_name.as_str() {
-                        "List" => {
+                        "list" => {
                             let element_type = self.parse_type_annotation()?;
                             self.consume(
                                 &TokenKind::RBracket,
-                                "Expected ']' after List element type",
+                                "Expected ']' after list element type",
                             )?;
                             AstNode::ListType(Box::new(element_type))
                         }
-                        "Dict" => {
+                        "dict" => {
                             let key_type = self.parse_type_annotation()?;
                             self.consume(
                                 &TokenKind::Comma,
-                                "Expected ',' between Dict key and value types",
+                                "Expected ',' between dict key and value types",
                             )?;
                             let value_type = self.parse_type_annotation()?;
                             self.consume(
                                 &TokenKind::RBracket,
-                                "Expected ']' after Dict value type",
+                                "Expected ']' after dict value type",
                             )?;
                             AstNode::DictType {
                                 key_type: Box::new(key_type),
@@ -1362,19 +1450,19 @@ impl<'a> Parser<'a> {
                             }
                         }
                         _ => {
-                            // Check if this is a capitalization error for List/Dict
-                            if base_name == "list" {
+                            // Check if this is a capitalization error for list/dict
+                            if base_name == "List" {
                                 return Err(CompilerError::syntax_error(
                                     format!("Unknown generic type: {}", base_name),
                                     type_location,
                                 )
-                                .with_hint("Did you mean 'List'? Generic types use PascalCase"));
-                            } else if base_name == "dict" {
+                                .with_hint("Did you mean 'list'? Generic types use lowercase Python spelling"));
+                            } else if base_name == "Dict" {
                                 return Err(CompilerError::syntax_error(
                                     format!("Unknown generic type: {}", base_name),
                                     type_location,
                                 )
-                                .with_hint("Did you mean 'Dict'? Generic types use PascalCase"));
+                                .with_hint("Did you mean 'dict'? Generic types use lowercase Python spelling"));
                             }
 
                             // General generic type: Name[T1, T2, ...]

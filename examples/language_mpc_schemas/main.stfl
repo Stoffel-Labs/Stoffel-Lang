@@ -10,31 +10,33 @@ object MpcJob:
 object ClientContribution:
   share: secret int64
   client_id: string
-  commitments: List[ShareBytes]
+  commitments: list[ShareBytes]
 
 object AuditedJob(MpcJob):
   transcript_hash: bytes
   approved: bool
 
 def main() -> int64:
-  var job = create_object()
-  set_field(job, "id", "nightly-risk-score")
-  set_field(job, "parties", 5)
-  set_field(job, "threshold", 1)
-  set_field(job, "curve", "bls12-381")
+  var job = MpcJob(
+    id: "nightly-risk-score",
+    parties: 5,
+    threshold: 1,
+    curve: "bls12-381",
+  )
 
-  var commitments: List[ShareBytes] = []
-  discard commitments.append(Bytes.from_string("commitment-a"))
-  discard commitments.append(Bytes.from_string("commitment-b"))
-  var review_grid: List[List[int64]] = [[5, 5], [3, 2]]
-  var keyed_scores: Dict[string, List[int64]] = {"latency": [1, 2], "privacy": [3, 4]}
+  var commitments: list[ShareBytes] = []
+  commitments.append(Bytes.from_string("commitment-a"))
+  commitments.append(Bytes.from_string("commitment-b"))
+  var review_grid: list[list[int64]] = [[5, 5], [3, 2]]
+  var keyed_scores: dict[string, list[int64]] = {"latency": [1, 2], "privacy": [3, 4]}
 
-  var audit = create_object()
-  var approved: bool = true
-  set_field(audit, "transcript_hash", Crypto.sha256(Bytes.from_string("nightly-risk-score:v1")))
-  set_field(audit, "approved", approved)
+  var approved: bool = True
+  var audit = AuditedJob(
+    transcript_hash: Crypto.sha256(Bytes.from_string("nightly-risk-score:v1")),
+    approved: approved,
+  )
 
-  var quorum_score: int64 = get_field(job, "parties") - get_field(job, "threshold")
+  var quorum_score: int64 = job.parties - job.threshold
   quorum_score += commitments.len()
   quorum_score += review_grid[0][1]
   quorum_score += keyed_scores["privacy"][0]

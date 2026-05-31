@@ -144,6 +144,7 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
         AstNode::Block(nodes) => AstNode::Block(nodes.into_iter().map(transform_ufcs).collect()),
         AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body,
@@ -153,6 +154,7 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
             node_id,
         } => AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body: Box::new(transform_ufcs(*body)),
@@ -228,6 +230,15 @@ pub fn transform_ufcs(node: AstNode) -> AstNode {
             location,
         } => AstNode::DiscardStatement {
             expression: Box::new(transform_ufcs(*expression)),
+            location,
+        },
+        AstNode::NamedArgument {
+            name,
+            value,
+            location,
+        } => AstNode::NamedArgument {
+            name,
+            value: Box::new(transform_ufcs(*value)),
             location,
         },
         _ => node,

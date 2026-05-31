@@ -1,3 +1,4 @@
+use stoffel_vm_types::compiled_binary::ClientIoManifest;
 pub(crate) use stoffel_vm_types::core_types::{ShareData, Value, F64};
 pub(crate) use stoffel_vm_types::instructions::Instruction;
 
@@ -164,6 +165,7 @@ pub struct BytecodeChunk {
 pub struct CompiledProgram {
     pub main_chunk: BytecodeChunk,
     pub function_chunks: std::collections::HashMap<String, BytecodeChunk>,
+    pub client_io_manifest: ClientIoManifest,
 }
 
 impl BytecodeChunk {

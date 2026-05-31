@@ -24,15 +24,15 @@ var field_result = complex_obj.settings.apply(value)
 # These lines primarily test the AST transformation logic.
 # We can use placeholder variables for now.
 
-var my_obj = nil # Placeholder
+var my_obj = None # Placeholder
 var data = 1
 var config = 2
 var a = 10
 var b = 5
-var first_obj = nil # Placeholder
+var first_obj = None # Placeholder
 var input = 100
 var modifier = 10
-var complex_obj = nil # Placeholder
+var complex_obj = None # Placeholder
 var value = 50
 
 # Example assignments to trigger parsing (if needed)

@@ -26,7 +26,7 @@ fn errors_contain(errors: &[String], text: &str) -> bool {
 #[test]
 fn test_variable_typo_suggests_correct_name() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var counter: int64 = 0
   var x: int64 = couter
 "#;
@@ -43,7 +43,7 @@ def main() -> nil:
 #[test]
 fn test_variable_typo_in_expression() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var total: int64 = 100
   var result: int64 = totl + 50
 "#;
@@ -56,7 +56,7 @@ def main() -> nil:
 #[test]
 fn test_variable_typo_multiple_candidates() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var count: int64 = 0
   var counter: int64 = 0
   var counting: int64 = 0
@@ -82,7 +82,7 @@ fn test_user_function_typo_suggests_correct_name() {
 def calculate(x: int64) -> int64:
   return x * 2
 
-def main() -> nil:
+def main() -> None:
   var result: int64 = calculte(5)
 "#;
 
@@ -100,7 +100,7 @@ def main() -> nil:
 #[test]
 fn test_builtin_function_typo_suggests_correct_name() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   prnt("hello")
 "#;
 
@@ -112,38 +112,27 @@ def main() -> nil:
 #[test]
 fn test_array_function_typo_suggests_correct_name() {
     let source = r#"
-def main() -> nil:
-  var items: List[int64] = create_array()
-  aray_push(items, 5)
+def main() -> None:
+  var items: list[int64] = []
+  apend(items, 5)
 "#;
 
     let errors = compile_and_get_errors(source);
-    assert!(
-        errors_contain(&errors, "aray_push"),
-        "Should mention the typo"
-    );
-    assert!(
-        errors_contain(&errors, "array_push"),
-        "Should suggest 'array_push'"
-    );
+    assert!(errors_contain(&errors, "apend"), "Should mention the typo");
+    assert!(errors_contain(&errors, "append"), "Should suggest 'append'");
 }
 
 #[test]
 fn test_create_array_typo() {
     let source = r#"
-def main() -> nil:
-  var items: List[int64] = creat_array()
+def main() -> None:
+  var items: list[int64] = []
+  var count = lne(items)
 "#;
 
     let errors = compile_and_get_errors(source);
-    assert!(
-        errors_contain(&errors, "creat_array"),
-        "Should mention the typo"
-    );
-    assert!(
-        errors_contain(&errors, "create_array"),
-        "Should suggest 'create_array'"
-    );
+    assert!(errors_contain(&errors, "lne"), "Should mention the typo");
+    assert!(errors_contain(&errors, "len"), "Should suggest 'len'");
 }
 
 // ===========================================
@@ -151,12 +140,11 @@ def main() -> nil:
 // ===========================================
 
 #[test]
-fn test_method_append_suggests_array_push() {
-    // Note: .append() now works via UFCS as an alias for array_push
-    // This test now verifies that the Pythonic syntax compiles successfully
+fn test_method_append_compiles() {
+    // Pythonic .append() compiles through UFCS to the append builtin.
     let source = r#"
-def main() -> nil:
-  var items: List[int64] = create_array()
+def main() -> None:
+  var items: list[int64] = []
   items.append(5)
 "#;
 
@@ -169,27 +157,26 @@ def main() -> nil:
 }
 
 #[test]
-fn test_method_length_suggests_array_length() {
-    // Note: .length() now works via UFCS as an alias for array_length
-    // This test now verifies that the Pythonic syntax compiles successfully
+fn test_method_length_compiles_as_len() {
+    // Pythonic .len() compiles through UFCS to the len builtin.
     let source = r#"
-def main() -> nil:
-  var items: List[int64] = create_array()
-  var n: int64 = items.length()
+def main() -> None:
+  var items: list[int64] = []
+  var n: int64 = items.len()
 "#;
 
     let errors = compile_and_get_errors(source);
     // Should compile without errors now that length is a builtin alias
     assert!(
         errors.is_empty(),
-        "Pythonic .length() should now compile successfully"
+        "Pythonic .len() should now compile successfully"
     );
 }
 
 #[test]
 fn test_method_reveal_suggests_assignment() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var x: secret int64 = 42
   var y: int64 = x.reveal()
 "#;
@@ -211,11 +198,11 @@ fn test_suggests_variable_from_outer_scope() {
     let source = r#"
 def process() -> int64:
   var outer_value: int64 = 100
-  if true:
+  if True:
     var x: int64 = outer_vlue
   return 0
 
-def main() -> nil:
+def main() -> None:
   var y: int64 = process()
 "#;
 
@@ -236,7 +223,7 @@ fn test_suggests_function_parameter() {
 def process(input_value: int64) -> int64:
   return input_vlue * 2
 
-def main() -> nil:
+def main() -> None:
   var x: int64 = process(5)
 "#;
 
@@ -258,7 +245,7 @@ def main() -> nil:
 #[test]
 fn test_no_suggestion_when_completely_different() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var counter: int64 = 0
   var x: int64 = xyz
 "#;
@@ -279,7 +266,7 @@ def main() -> nil:
 #[test]
 fn test_valid_program_no_errors() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var x: int64 = 0
 "#;
 
@@ -291,7 +278,7 @@ def main() -> nil:
 #[test]
 fn test_multiple_errors_each_with_suggestions() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var counter: int64 = 0
   var total: int64 = 0
   var a: int64 = couter
@@ -309,7 +296,7 @@ def main() -> nil:
 #[test]
 fn test_case_sensitivity() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var Counter: int64 = 0
   var x: int64 = counter
 "#;

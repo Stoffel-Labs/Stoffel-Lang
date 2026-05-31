@@ -74,6 +74,21 @@ impl BuiltinRegistry {
             .and_then(|object| object.methods.get(method_name))
             .map(|method| method.qualified_name.as_str())
     }
+
+    pub fn is_receiver_bound_method(&self, object_name: &str, method_name: &str) -> bool {
+        let Some(method) = self
+            .objects
+            .get(object_name)
+            .and_then(|object| object.methods.get(method_name))
+        else {
+            return false;
+        };
+
+        matches!(
+            method.parameters.first(),
+            Some(SymbolType::Object(parameter_type)) if parameter_type == object_name
+        )
+    }
 }
 
 pub fn builtin_registry() -> &'static BuiltinRegistry {
@@ -117,7 +132,7 @@ fn build_builtin_registry() -> BuiltinRegistry {
             ..
         } = node
         {
-            let target = type_from_ast(target_type, &registry);
+            let target = type_from_ast(target_type, &registry, &[]);
             registry.type_aliases.insert(name.clone(), target);
             registry.type_names.insert(name.clone());
         }
@@ -127,6 +142,7 @@ fn build_builtin_registry() -> BuiltinRegistry {
         match node {
             AstNode::FunctionDefinition {
                 name: Some(name),
+                type_params,
                 parameters,
                 return_type,
                 pragmas,
@@ -135,10 +151,10 @@ fn build_builtin_registry() -> BuiltinRegistry {
             } if has_builtin_pragma(pragmas) => {
                 let vm_symbol = builtin_vm_symbol(pragmas).unwrap_or_else(|| name.clone());
                 let info = BuiltinFunctionInfo {
-                    parameters: parameter_types(parameters, &registry),
+                    parameters: parameter_types(parameters, &registry, type_params),
                     return_type: return_type
                         .as_deref()
-                        .map(|node| type_from_ast(node, &registry))
+                        .map(|node| type_from_ast(node, &registry, type_params))
                         .unwrap_or(SymbolType::Void),
                     vm_symbol,
                 };
@@ -160,6 +176,7 @@ fn build_builtin_registry() -> BuiltinRegistry {
                 for method in methods {
                     let AstNode::FunctionDefinition {
                         name: Some(method_name),
+                        type_params,
                         parameters,
                         return_type,
                         pragmas,
@@ -183,10 +200,10 @@ fn build_builtin_registry() -> BuiltinRegistry {
                     let qualified_name = builtin_vm_symbol(pragmas)
                         .unwrap_or_else(|| format!("{}.{}", name, method_name));
                     let info = ObjectMethodInfo {
-                        parameters: parameter_types(parameters, &registry),
+                        parameters: parameter_types(parameters, &registry, type_params),
                         return_type: return_type
                             .as_deref()
-                            .map(|node| type_from_ast(node, &registry))
+                            .map(|node| type_from_ast(node, &registry, type_params))
                             .unwrap_or(SymbolType::Void),
                         qualified_name,
                     };
@@ -267,50 +284,56 @@ fn builtin_vm_symbol(pragmas: &[Pragma]) -> Option<String> {
     })
 }
 
-fn parameter_types(parameters: &[Parameter], registry: &BuiltinRegistry) -> Vec<SymbolType> {
+fn parameter_types(
+    parameters: &[Parameter],
+    registry: &BuiltinRegistry,
+    type_params: &[String],
+) -> Vec<SymbolType> {
     parameters
         .iter()
         .map(|parameter| {
             parameter
                 .type_annotation
                 .as_deref()
-                .map(|node| type_from_ast(node, registry))
+                .map(|node| type_from_ast(node, registry, type_params))
                 .unwrap_or(SymbolType::Unknown)
         })
         .collect()
 }
 
-fn type_from_ast(node: &AstNode, registry: &BuiltinRegistry) -> SymbolType {
+fn type_from_ast(node: &AstNode, registry: &BuiltinRegistry, type_params: &[String]) -> SymbolType {
     match node {
-        AstNode::Identifier(name, _) => type_from_name(name, registry),
-        AstNode::SecretType(inner) => SymbolType::Secret(Box::new(type_from_ast(inner, registry))),
+        AstNode::Identifier(name, _) => type_from_name(name, registry, type_params),
+        AstNode::SecretType(inner) => {
+            SymbolType::Secret(Box::new(type_from_ast(inner, registry, type_params)))
+        }
         AstNode::ListType(element_type) => {
-            SymbolType::List(Box::new(type_from_ast(element_type, registry)))
+            SymbolType::List(Box::new(type_from_ast(element_type, registry, type_params)))
         }
         AstNode::DictType {
             key_type,
             value_type,
             ..
         } => SymbolType::Dict(
-            Box::new(type_from_ast(key_type, registry)),
-            Box::new(type_from_ast(value_type, registry)),
+            Box::new(type_from_ast(key_type, registry, type_params)),
+            Box::new(type_from_ast(value_type, registry, type_params)),
         ),
         AstNode::GenericType {
             base_name,
-            type_params,
+            type_params: generic_args,
             ..
         } => SymbolType::Generic(
             base_name.clone(),
-            type_params
+            generic_args
                 .iter()
-                .map(|param| type_from_ast(param, registry))
+                .map(|param| type_from_ast(param, registry, type_params))
                 .collect(),
         ),
         _ => SymbolType::Unknown,
     }
 }
 
-fn type_from_name(name: &str, registry: &BuiltinRegistry) -> SymbolType {
+fn type_from_name(name: &str, registry: &BuiltinRegistry, type_params: &[String]) -> SymbolType {
     match name {
         "i64" | "int64" | "int" => SymbolType::Int64,
         "i32" | "int32" => SymbolType::Int32,
@@ -322,11 +345,11 @@ fn type_from_name(name: &str, registry: &BuiltinRegistry) -> SymbolType {
         "u8" | "uint8" => SymbolType::UInt8,
         "float" | "float64" | "f64" => SymbolType::Float,
         "string" => SymbolType::String,
-        "bool" | "boolean" => SymbolType::Bool,
+        "bool" => SymbolType::Bool,
         "bytes" | "ByteArray" => SymbolType::List(Box::new(SymbolType::UInt8)),
         "void" => SymbolType::Void,
-        "nil" => SymbolType::Nil,
-        "unknown" | "any" => SymbolType::Unknown,
+        "None" => SymbolType::Nil,
+        _ if type_params.iter().any(|param| param == name) => SymbolType::TypeVar(name.to_string()),
         _ => registry
             .resolve_type_name(name)
             .unwrap_or_else(|| SymbolType::TypeName(name.to_string())),

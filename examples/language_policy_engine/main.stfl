@@ -12,8 +12,8 @@ def seasonal_adjustment(days: int64) -> int64:
 def main() -> int64:
   var amount: int64 = 7200
   var tenure_months: int64 = 30
-  var tags: Dict[string, int64] = {"verified": 8, "repeat_customer": 12, "manual_review": 0}
-  var audit_events: List[int64] = [3, 5, 8]
+  var tags: dict[string, int64] = {"verified": 8, "repeat_customer": 12, "manual_review": 0}
+  var audit_events: list[int64] = [3, 5, 8]
 
   var score: int64 = base_score(amount, tenure_months)
   score += tag_bonus(tags["verified"], tags["repeat_customer"], tags["manual_review"])
@@ -38,8 +38,8 @@ def main() -> int64:
   var unused_i16: int16 = 320i16
   var unused_u32: uint32 = 9000u32
   var fee_rate: float64 = 0.125
-  var enabled: boolean = true
-  var nothing = nil
+  var enabled: bool = True
+  var nothing = None
 
   if amount_i32 > 0i32 and tenure_u16 > 0u16 and risk_bucket_u8 < 10u8 and settlement_cap_u64 > 0u64:
     score += 4

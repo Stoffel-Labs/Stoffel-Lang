@@ -3,30 +3,23 @@ def mark_complete() -> void:
   print(message)
   return
 
-def add_event(events: List[unknown], event_name: string):
-  discard array_push(events, event_name)
+def add_event(events: list[string], event_name: string):
+  events.append(event_name)
   return
 
 def main() -> int64:
-  var work_item = create_object()
-  set_field(work_item, "id", "invoice-2048")
-  set_field(work_item, "priority", 7)
-  set_field(work_item, "owner", "risk-ops")
-
-  var events = create_array()
-  discard array_push(events, "created")
+  var events: list[string] = []
+  events.append("created")
   add_event(events, "scored")
-  discard push(events, "approved")
-  set_field(work_item, "events", events)
+  events.append("approved")
 
-  var labels: List[string] = ["finance", "priority"]
+  var labels: list[string] = ["finance", "priority"]
   labels[0] = "billing"
 
-  discard get_field(work_item, "owner")
-  discard type(work_item)
-  discard type(labels)
+  type(events)
+  type(labels)
 
   var callback = create_closure("mark_complete")
-  discard call_closure(callback)
+  call_closure(callback)
 
-  return array_length(events) + length(events) + len(events) + labels.len()
+  return len(events) + labels.len()

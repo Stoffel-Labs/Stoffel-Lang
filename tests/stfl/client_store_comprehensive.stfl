@@ -6,7 +6,7 @@ def combine_shares(a: Share, b: Share) -> Share:
   return Share.add(a, b)
 
 # Function demonstrating various valid patterns
-def demonstrate_patterns() -> nil:
+def demonstrate_patterns() -> None:
   # Pattern 1: Direct assignment with explicit Share type annotation
   var share_a: Share = ClientStore.take_share(0, 0)
 
@@ -30,7 +30,7 @@ def demonstrate_patterns() -> nil:
   print("All patterns validated successfully")
 
 # Entry point
-def main() -> nil:
+def main() -> None:
   demonstrate_patterns()
 
   # Additional test: Multiple shares from different clients

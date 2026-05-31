@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::Parser as ClapParser; // Alias to avoid name clash with our parser module
+use stoffel_vm_types::compiled_binary::MpcBackend;
 use stoffellang::{binary_converter, bytecode, compiler, core_types, errors};
 
 const SRC_EXT: &str = "stfl";
@@ -42,6 +43,10 @@ struct CliArgs {
     /// Enable optimizations (shorthand for -O2)
     #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "opt_level")]
     optimize: bool,
+
+    /// MPC backend to record in generated .stflb metadata: honeybadger or avss
+    #[arg(long, default_value = "honeybadger")]
+    mpc_backend: String,
 }
 
 fn dedupe_constants_for_display(constants: &[bytecode::Constant]) -> Vec<bytecode::Constant> {
@@ -129,10 +134,23 @@ fn main() {
         .to_string_lossy()
         .to_string();
 
+    let mpc_backend = match args.mpc_backend.as_str() {
+        "honeybadger" | "hb" => MpcBackend::HoneyBadger,
+        "avss" => MpcBackend::Avss,
+        other => {
+            eprintln!(
+                "Error: unsupported --mpc-backend '{}'. Expected 'honeybadger' or 'avss'",
+                other
+            );
+            process::exit(2);
+        }
+    };
+
     let options = compiler::CompilerOptions {
         optimize: args.optimize || args.opt_level > 0,
         optimization_level: if args.optimize { 2 } else { args.opt_level },
         print_ir: args.print_ir,
+        mpc_backend,
     };
 
     println!("Compiling {}...", filename);

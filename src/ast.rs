@@ -92,6 +92,7 @@ pub enum AstNode {
     },
     FunctionDefinition {
         name: Option<String>,
+        type_params: Vec<String>,
         parameters: Vec<Parameter>,
         return_type: Option<Box<AstNode>>,
         body: Box<AstNode>,

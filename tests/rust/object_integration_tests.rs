@@ -10,6 +10,7 @@
 //! - Field access
 //! - Object types in declarations
 
+use stoffel_vm_types::compiled_binary::MpcBackend;
 use stoffel_vm_types::instructions::Instruction;
 use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 use stoffellang::compiler::{compile, CompilerOptions};
@@ -25,6 +26,7 @@ fn default_options() -> CompilerOptions {
         optimize: false,
         optimization_level: 0,
         print_ir: false,
+        mpc_backend: MpcBackend::default(),
     }
 }
 
@@ -135,7 +137,7 @@ def normalize_score(raw_score: Share) -> Share:
   var adjusted = Share.add_scalar(raw_score, 25)
   return Share.mul_scalar(adjusted, 2)
 
-def main() -> nil:
+def main() -> None:
   var score = ClientStore.take_share(0, 0)
   var normalized = normalize_score(score)
   discard Share.open(normalized)
@@ -196,7 +198,7 @@ def get_share_from_client(client_id: int64, share_id: int64) -> Share:
   var result: Share = ClientStore.take_share(client_id, share_id)
   return result
 
-def main() -> nil:
+def main() -> None:
   var s = get_share_from_client(0, 0)
 "#;
     assert!(compile_source(source).is_ok());
@@ -324,15 +326,15 @@ Share.send_to_client(s, 0)
 
 #[test]
 fn test_share_interpolate_local() {
-    // interpolate_local takes a List[Share] - but there's currently an issue
-    // with List[Object] type matching, so we test just that the method exists
+    // interpolate_local takes a list[Share] - but there's currently an issue
+    // with list[Object] type matching, so we test just that the method exists
     // and is recognized via a simpler call pattern
     let source = r#"
 var s = Share.from_clear(42)
 var result = Share.open(s)
 "#;
     // This tests that Share methods work; interpolate_local has a known
-    // type matching issue with List[Share] that should be fixed separately
+    // type matching issue with list[Share] that should be fixed separately
     assert!(compile_source(source).is_ok());
 }
 
@@ -445,7 +447,7 @@ var received = Rbc.receive(1, 0)
 #[test]
 fn test_aba_propose() {
     let source = r#"
-Aba.propose(true)
+Aba.propose(True)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -461,7 +463,7 @@ var outcome = Aba.result(0, 1)
 #[test]
 fn test_aba_propose_and_wait() {
     let source = r#"
-var result = Aba.propose_and_wait(true, 1000)
+var result = Aba.propose_and_wait(True, 1000)
 "#;
     assert!(compile_source(source).is_ok());
 }
@@ -589,7 +591,7 @@ def leader_election() -> int64:
   var nonce = Mpc.rand_int(64)
   return my_id
 
-def main() -> nil:
+def main() -> None:
   var leader = leader_election()
   print("Protocol completed")
 "#;
@@ -606,7 +608,7 @@ def compute_sum(num_shares: int64) -> Share:
     total = Share.add(total, s)
   return total
 
-def main() -> nil:
+def main() -> None:
   var result = compute_sum(5)
   print("Computation done")
 "#;
@@ -630,7 +632,7 @@ var sum2 = Share.add(sum, s_c)
 #[test]
 fn test_conditional_based_on_mpc_state() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var ready = Mpc.is_ready()
   var my_id = Mpc.party_id()
   var n = Mpc.n_parties()
@@ -647,13 +649,13 @@ def main() -> nil:
 #[test]
 fn test_mixed_builtin_objects() {
     let source = r#"
-def main() -> nil:
+def main() -> None:
   var my_id = Mpc.party_id()
   var n_clients = ClientStore.get_number_clients()
   for client in 0..n_clients:
     var s = ClientStore.take_share(client, 0)
   Rbc.broadcast("shares collected")
-  Aba.propose(true)
+  Aba.propose(True)
   print("Protocol complete")
 "#;
     assert!(compile_source(source).is_ok());
@@ -679,6 +681,42 @@ fn test_ufcs_method_to_function_share() {
 var s = Share.from_clear(42)
 "#;
     assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_builtin_receiver_method_style_share_open() {
+    let source = r#"
+var s = Share.from_clear(42)
+var opened = s.open()
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_builtin_receiver_function_style_share_open() {
+    let source = r#"
+var s = Share.from_clear(42)
+var opened = open(s)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_builtin_receiver_binary_method_style_share_add() {
+    let source = r#"
+var left = Share.from_clear(10)
+var right = Share.from_clear(20)
+var sum = left.add(right)
+"#;
+    assert!(compile_source(source).is_ok());
+}
+
+#[test]
+fn test_static_builtin_object_method_still_requires_namespace() {
+    let source = r#"
+var s = from_clear(42)
+"#;
+    assert!(expect_compile_error(source, "undeclared function"));
 }
 
 #[test]
@@ -755,6 +793,41 @@ var sum = Share.add(s1, s2)
 "#;
     let result = compile(source, "test.stfl", &default_options());
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_bytecode_receiver_method_resolves_to_bound_builtin() {
+    let source = r#"
+var s = Share.from_clear(10)
+var opened = s.open()
+"#;
+    let program = compile(source, "test.stfl", &default_options()).unwrap();
+    let bytecode_str = format!("{:?}", program);
+    assert!(bytecode_str.contains("open"));
+    assert!(!bytecode_str.contains("Share.open"));
+}
+
+#[test]
+fn test_bytecode_qualified_receiver_method_resolves_to_bare_method_call() {
+    let source = r#"
+var s = Share.from_clear(10)
+var opened = Share.open(s)
+"#;
+    let program = compile(source, "test.stfl", &default_options()).unwrap();
+    let bytecode_str = format!("{:?}", program);
+    assert!(bytecode_str.contains("open"));
+    assert!(!bytecode_str.contains("Share.open"));
+}
+
+#[test]
+fn test_bytecode_static_builtin_stays_qualified() {
+    let source = r#"
+var s = Share.from_clear(10)
+"#;
+    let program = compile(source, "test.stfl", &default_options()).unwrap();
+    let bytecode_str = format!("{:?}", program);
+    assert!(bytecode_str.contains("Share.from_clear"));
+    assert!(!bytecode_str.contains("CALL(\"from_clear\")"));
 }
 
 #[test]

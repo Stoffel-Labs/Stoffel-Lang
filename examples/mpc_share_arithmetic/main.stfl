@@ -12,8 +12,8 @@ def main() -> Share:
 
   if client_count > 0:
     var client_left = ClientStore.take_share(0, 0)
-    product = Share.mul(client_left, right)
+    product = client_left.mul(right)
   else:
-    product = Share.mul(Share.from_clear(37), right)
+    product = Share.from_clear(37).mul(right)
 
   return product

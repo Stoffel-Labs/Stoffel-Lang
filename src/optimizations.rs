@@ -94,7 +94,7 @@ fn collect_referenced_vars(node: &AstNode, vars: &mut HashSet<String>) {
     }
 }
 
-/// Checks if an AST node is a Share.open() function call
+/// Checks if an AST node is a Share.open() receiver method call.
 fn is_share_open_call(node: &AstNode) -> Option<&AstNode> {
     if let AstNode::FunctionCall {
         function,
@@ -103,7 +103,7 @@ fn is_share_open_call(node: &AstNode) -> Option<&AstNode> {
     } = node
     {
         if let AstNode::Identifier(name, _) = function.as_ref() {
-            if name == "Share.open" && arguments.len() == 1 {
+            if (name == "Share.open" || name == "open") && arguments.len() == 1 {
                 return Some(&arguments[0]);
             }
         }
@@ -409,6 +409,7 @@ pub fn optimize_reveals(node: AstNode) -> AstNode {
         AstNode::Block(statements) => AstNode::Block(optimize_block(statements)),
         AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body,
@@ -418,6 +419,7 @@ pub fn optimize_reveals(node: AstNode) -> AstNode {
             node_id,
         } => AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body: Box::new(optimize_reveals(*body)),
@@ -804,6 +806,7 @@ pub fn reorder_for_reveal_batching(node: AstNode) -> AstNode {
         }
         AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body,
@@ -813,6 +816,7 @@ pub fn reorder_for_reveal_batching(node: AstNode) -> AstNode {
             node_id,
         } => AstNode::FunctionDefinition {
             name,
+            type_params,
             parameters,
             return_type,
             body: Box::new(reorder_for_reveal_batching(*body)),

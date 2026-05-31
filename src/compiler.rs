@@ -9,6 +9,7 @@ use crate::optimizations;
 use crate::parser;
 use crate::semantic;
 use crate::ufcs;
+use stoffel_vm_types::compiled_binary::MpcBackend;
 
 /// Options to configure the compilation process.
 #[derive(Debug, Clone, Default)]
@@ -19,6 +20,8 @@ pub struct CompilerOptions {
     pub optimization_level: u8,
     /// Print intermediate representations (Tokens, AST) for debugging.
     pub print_ir: bool,
+    /// MPC backend expected by the coordinator when running the emitted binary.
+    pub mpc_backend: MpcBackend,
     // Add more options as needed: output_path, target_platform, etc.
 }
 
@@ -112,7 +115,7 @@ pub fn compile(
     };
 
     // 6. Code Generation
-    let compiled_program = match codegen::generate_bytecode(&optimized_ast) {
+    let mut compiled_program = match codegen::generate_bytecode(&optimized_ast) {
         Ok(program) => program,
         Err(e) => {
             error_reporter.add_error(e);
@@ -120,6 +123,7 @@ pub fn compile(
             return Err(error_reporter.get_all().into_iter().cloned().collect());
         }
     };
+    compiled_program.client_io_manifest.mpc_backend = options.mpc_backend;
 
     if error_reporter.has_errors() {
         Err(error_reporter.get_all().into_iter().cloned().collect())

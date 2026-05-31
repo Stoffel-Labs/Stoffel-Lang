@@ -18,7 +18,7 @@ def process_shares() -> Share:
   return result
 
 # Entry point
-def main() -> nil:
+def main() -> None:
   # Valid: direct assignment to Share variable
   var my_share = ClientStore.take_share(0, 0)
 
