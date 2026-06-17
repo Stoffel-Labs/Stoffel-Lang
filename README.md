@@ -2,6 +2,8 @@
 
 A compiler for the Stoffel programming language, with support for generating bytecode compatible with the StoffelVM.
 
+**Go to the new [Stoffel monorepo](https://github.com/Stoffel-Labs/stoffel) which contains the latest compiler for Stoffel-Lang**
+
 ## Features
 
 - Modern syntax inspired by Rust, Python, and JavaScript
