@@ -6,8 +6,8 @@
 
 def process_two_secrets() -> int64:
   # Get two independent secret values
-  secret var s1 = ClientStore.take_share(0, 0)
-  secret var s2 = ClientStore.take_share(0, 1)
+  var s1 = ClientStore.take_share(0, 0)
+  var s2 = ClientStore.take_share(0, 1)
 
   # WITHOUT OPTIMIZATION (original order):
   # var a: int64 = s1      # reveal s1 → queued
@@ -31,6 +31,6 @@ def process_two_secrets() -> int64:
 
   return x + y
 
-main main() -> int64:
+def main() -> int64:
   var result: int64 = process_two_secrets()
   return result

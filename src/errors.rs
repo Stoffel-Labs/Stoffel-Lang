@@ -48,9 +48,9 @@ pub struct CompilerError {
     pub location: SourceLocation,
     pub severity: ErrorSeverity,
     pub category: ErrorCategory,
-    pub code: String,
-    pub hint: Option<String>,
-    pub source_snippet: Option<String>,
+    pub code: &'static str,
+    pub hint: Option<Box<str>>,
+    pub source_snippet: Option<Box<str>>,
 }
 
 impl CompilerError {
@@ -61,7 +61,7 @@ impl CompilerError {
             location,
             severity: ErrorSeverity::Error,
             category: ErrorCategory::Syntax,
-            code: "E001".to_string(),
+            code: "E001",
             hint: None,
             source_snippet: None,
         }
@@ -74,7 +74,7 @@ impl CompilerError {
             location,
             severity: ErrorSeverity::Error,
             category: ErrorCategory::Type,
-            code: "E101".to_string(),
+            code: "E101",
             hint: None,
             source_snippet: None,
         }
@@ -87,7 +87,7 @@ impl CompilerError {
             location,
             severity: ErrorSeverity::Error,
             category: ErrorCategory::Semantic,
-            code: "E201".to_string(),
+            code: "E201",
             hint: None,
             source_snippet: None,
         }
@@ -100,7 +100,7 @@ impl CompilerError {
             location: SourceLocation::default(),
             severity: ErrorSeverity::Fatal,
             category: ErrorCategory::Internal,
-            code: "E901".to_string(),
+            code: "E901",
             hint: None,
             source_snippet: None,
         }
@@ -108,13 +108,13 @@ impl CompilerError {
 
     /// Adds a hint to the error
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
+        self.hint = Some(hint.into().into_boxed_str());
         self
     }
 
     /// Adds a source code snippet to the error
     pub fn with_snippet(mut self, snippet: impl Into<String>) -> Self {
-        self.source_snippet = Some(snippet.into());
+        self.source_snippet = Some(snippet.into().into_boxed_str());
         self
     }
 
@@ -246,14 +246,19 @@ pub fn format_error_header(count: usize) -> String {
     let s = if count == 1 { "" } else { "s" };
     format!(
         "Compilation failed with {} error{}:",
-        count.to_string().red().bold(), s.red().bold()
+        count.to_string().red().bold(),
+        s.red().bold()
     )
 }
 
 /// Helper function to extract source code snippet around an error location
-pub fn extract_source_snippet(file: &str, location: &SourceLocation, context_lines: usize) -> String {
+pub fn extract_source_snippet(
+    file: &str,
+    location: &SourceLocation,
+    context_lines: usize,
+) -> String {
     let lines: Vec<&str> = file.lines().collect();
-    
+
     if location.line == 0 || location.line > lines.len() || location.file == "<unknown>" {
         return String::new();
     }
@@ -261,14 +266,14 @@ pub fn extract_source_snippet(file: &str, location: &SourceLocation, context_lin
     let line_idx = location.line - 1;
     let start_line = line_idx.saturating_sub(context_lines);
     let end_line = std::cmp::min(line_idx + context_lines, lines.len() - 1);
-    
+
     let mut result = String::new();
-    
-    for i in start_line..=end_line {
+
+    for (i, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line) {
         let line_num = i + 1;
         let prefix = if i == line_idx { " > " } else { "   " };
-        result.push_str(&format!("{}{:4} | {}\n", prefix, line_num, lines[i]));
-        
+        result.push_str(&format!("{}{:4} | {}\n", prefix, line_num, line));
+
         if i == line_idx {
             // Add a pointer to the exact column
             let mut pointer = String::from("     | ");
@@ -280,7 +285,7 @@ pub fn extract_source_snippet(file: &str, location: &SourceLocation, context_lin
             result.push('\n');
         }
     }
-    
+
     result
 }
 

@@ -2,10 +2,18 @@ use crate::errors::SourceLocation;
 use crate::symbol_table::SymbolType;
 
 #[derive(Debug, Clone, PartialEq, Hash)]
-pub enum IntWidth { W8, W16, W32, W64 }
+pub enum IntWidth {
+    W8,
+    W16,
+    W32,
+    W64,
+}
 
 #[derive(Debug, Clone, PartialEq, Hash)]
-pub enum IntKind { Signed(IntWidth), Unsigned(IntWidth) }
+pub enum IntKind {
+    Signed(IntWidth),
+    Unsigned(IntWidth),
+}
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Value {
@@ -130,6 +138,17 @@ pub enum AstNode {
         is_secret: bool,
         location: SourceLocation,
     },
+    BuiltinTypeDefinition {
+        name: String,
+        target_type: Option<Box<AstNode>>,
+        is_opaque_object: bool,
+        location: SourceLocation,
+    },
+    BuiltinObjectDefinition {
+        name: String,
+        methods: Vec<AstNode>,
+        location: SourceLocation,
+    },
     ObjectDefinition {
         name: String,
         base_type: Option<Box<AstNode>>,
@@ -205,6 +224,8 @@ impl AstNode {
             self,
             AstNode::Identifier(_, _)
                 | AstNode::TypeAlias { .. }
+                | AstNode::BuiltinTypeDefinition { .. }
+                | AstNode::BuiltinObjectDefinition { .. }
                 | AstNode::ObjectDefinition { .. }
                 | AstNode::EnumDefinition { .. }
                 | AstNode::FunctionType { .. }
@@ -226,16 +247,25 @@ impl AstNode {
             AstNode::ListLiteral(_) | AstNode::TupleLiteral(_) => true,
             AstNode::SetLiteral(_) | AstNode::DictLiteral(_) => true,
             AstNode::IfExpression { .. } => true,
-            AstNode::Block(nodes) => nodes.last().map_or(false, |n| n.is_expression()),
+            AstNode::Block(nodes) => nodes.last().is_some_and(|n| n.is_expression()),
             AstNode::Assignment { .. } | AstNode::VariableDeclaration { .. } => false,
             AstNode::WhileLoop { .. } | AstNode::ForLoop { .. } => false,
-            AstNode::Return { .. } | AstNode::Yield(_) | AstNode::Break | AstNode::Continue => false,
+            AstNode::Return { .. } | AstNode::Yield(_) | AstNode::Break | AstNode::Continue => {
+                false
+            }
             AstNode::FunctionDefinition { .. } | AstNode::TypeAlias { .. } => false,
+            AstNode::BuiltinTypeDefinition { .. } | AstNode::BuiltinObjectDefinition { .. } => {
+                false
+            }
             AstNode::Import { .. } => false,
             AstNode::ObjectDefinition { .. } | AstNode::EnumDefinition { .. } => false,
             AstNode::TryCatch { .. } => false,
             AstNode::NamedArgument { .. } => false,
-            AstNode::FunctionType { .. } | AstNode::TupleType(_) | AstNode::ListType(_) | AstNode::DictType { .. } | AstNode::GenericType { .. } => false,
+            AstNode::FunctionType { .. }
+            | AstNode::TupleType(_)
+            | AstNode::ListType(_)
+            | AstNode::DictType { .. }
+            | AstNode::GenericType { .. } => false,
             AstNode::DiscardStatement { .. } => false,
             &AstNode::SecretType(_) => todo!(),
         }
@@ -255,6 +285,8 @@ impl AstNode {
             AstNode::FieldAccess { location: loc, .. } => loc.clone(),
             AstNode::IndexAccess { location: loc, .. } => loc.clone(),
             AstNode::TypeAlias { location: loc, .. } => loc.clone(),
+            AstNode::BuiltinTypeDefinition { location: loc, .. } => loc.clone(),
+            AstNode::BuiltinObjectDefinition { location: loc, .. } => loc.clone(),
             AstNode::ObjectDefinition { location: loc, .. } => loc.clone(),
             AstNode::EnumDefinition { location: loc, .. } => loc.clone(),
             AstNode::FunctionType { location: loc, .. } => loc.clone(),
@@ -265,8 +297,14 @@ impl AstNode {
             AstNode::Import { location: loc, .. } => loc.clone(),
             AstNode::CommandCall { location: loc, .. } => loc.clone(),
             AstNode::DiscardStatement { location: loc, .. } => loc.clone(),
-            AstNode::Return { value: Some(expr), location: _ } => expr.location(),
-            AstNode::Return { value: None, location } => location.clone(),
+            AstNode::Return {
+                value: Some(expr),
+                location: _,
+            } => expr.location(),
+            AstNode::Return {
+                value: None,
+                location,
+            } => location.clone(),
             AstNode::Literal(_) => SourceLocation::default(),
             _ => SourceLocation::default(),
         }

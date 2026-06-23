@@ -44,7 +44,7 @@ def greedy_knapsack(weights: List[secret int64], thresholds: List[int64], n: int
 
   return total
 
-main main() -> nil:
+def main() -> nil:
   # Build weights list using create_array() and array_push()
   # Note: empty list literal [] is not supported
   var weights: List[secret int64] = create_array()

@@ -3,7 +3,7 @@
 # Add a negative test to ensure 'let' is rejected
 let x = 1
 
-# And 'secret let' specifically suggests 'secret var'
+# And 'secret let' specifically suggests putting secret on the type
 secret let y = 2
 
 # No entry point on purpose (syntax error showcase)

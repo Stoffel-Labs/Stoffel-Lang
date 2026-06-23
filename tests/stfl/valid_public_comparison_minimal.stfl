@@ -1,4 +1,4 @@
-main main() -> nil:
+def main() -> nil:
   var a: int64 = 1
   var b: int64 = 2
   var s: secret int64 = 0

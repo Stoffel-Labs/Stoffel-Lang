@@ -32,7 +32,7 @@ def greedy_knapsack(weights: List[secret int64], thresholds: List[int64], n: int
 
   return total
 
-main main() -> nil:
+def main() -> nil:
   # Build weights list using Pythonic syntax - much cleaner!
   var weights: List[secret int64] = []
   weights.append(1000)

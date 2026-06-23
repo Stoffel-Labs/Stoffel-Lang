@@ -3,7 +3,7 @@
 # +3 for FizzBuzz (divisible by 15), +1 for Fizz (divisible by 3), +2 for Buzz (divisible by 5)
 # Expected checksum: 126
 
-main main() -> nil:
+def main() -> nil:
   var sum = 0
 
   for i in 1..100:

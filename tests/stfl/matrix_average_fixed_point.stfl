@@ -35,19 +35,19 @@ def federated_average_2x3() -> List[float]:
   var elem_idx: int64 = 0
   while elem_idx < matrix_size:
     # Initialize accumulator with first client's share for this element
-    secret var element_sum = ClientStore.take_share_fixed(0, elem_idx)
+    var element_sum = ClientStore.take_share_fixed(0, elem_idx)
 
     # Sum this element across remaining clients
     var client_idx: int64 = 1
     while client_idx < num_clients:
-      secret var share = ClientStore.take_share_fixed(client_idx, elem_idx)
-      element_sum = element_sum + share
+      var share = ClientStore.take_share_fixed(client_idx, elem_idx)
+      element_sum = Share.add(element_sum, share)
       client_idx = client_idx + 1
 
     # Reveal the sum by assigning to a clear variable
     # MOV from secret register to clear register triggers deferred reveal
     # The VM batches these reveals automatically for efficiency
-    var revealed_sum: float = element_sum
+    var revealed_sum: float = Share.open_fixed(element_sum)
 
     # Divide by num_clients to get the average for this element
     # The result is still fixed-point scaled by 2^16
@@ -61,7 +61,7 @@ def federated_average_2x3() -> List[float]:
   return result
 
 # Entry point - returns the array of per-element averages
-main main() -> List[float]:
+def main() -> List[float]:
   var averages: List[float] = federated_average_2x3()
 
   # The averages array contains per-element averages:

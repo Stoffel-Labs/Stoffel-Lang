@@ -1,4 +1,4 @@
-main main() -> nil:
+def main() -> nil:
   var i8v: int8 = 10i8
   var i16v: int16 = 10i16
   var i32v: int32 = 100i32

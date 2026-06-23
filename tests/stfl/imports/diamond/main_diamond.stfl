@@ -3,7 +3,7 @@
 import left
 import right
 
-main main() -> int64:
+def main() -> int64:
   var left_val = left_compute()
   var right_val = right_compute()
   return left_val + right_val

@@ -155,7 +155,8 @@ pub fn compile_file(
         multi_file_compiler::compile_project(file_path, options)
     } else {
         // Use single-file compilation
-        let filename = file_path.file_name()
+        let filename = file_path
+            .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown.stfl");
         compile(source, filename, options)

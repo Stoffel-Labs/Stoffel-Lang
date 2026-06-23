@@ -7,9 +7,9 @@
 //! - Chained method calls
 //! - Object types in declarations
 
+use stoffellang::ast::AstNode;
 use stoffellang::lexer::{tokenize, TokenKind};
 use stoffellang::parser::parse;
-use stoffellang::ast::AstNode;
 
 // ===========================================
 // Lexer tests for dot notation
@@ -35,7 +35,10 @@ fn test_lexer_chained_dots() {
     let tokens = tokenize(source, "test.stfl").unwrap();
 
     // Count the number of Dot tokens
-    let dot_count = tokens.iter().filter(|t| matches!(t.kind, TokenKind::Dot)).count();
+    let dot_count = tokens
+        .iter()
+        .filter(|t| matches!(t.kind, TokenKind::Dot))
+        .count();
     assert_eq!(dot_count, 3, "Should have 3 dot tokens");
 }
 
@@ -98,7 +101,9 @@ fn test_parse_simple_field_access() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FieldAccess { object, field_name, .. } => {
+        AstNode::FieldAccess {
+            object, field_name, ..
+        } => {
             assert_eq!(field_name, "field");
             assert!(matches!(&**object, AstNode::Identifier(ref name, _) if name == "obj"));
         }
@@ -117,10 +122,16 @@ fn test_parse_chained_field_access() {
 
     // Should be: FieldAccess { object: FieldAccess { object: a, field: b }, field: c }
     match &statements[0] {
-        AstNode::FieldAccess { object, field_name, .. } => {
+        AstNode::FieldAccess {
+            object, field_name, ..
+        } => {
             assert_eq!(field_name, "c");
             match &**object {
-                AstNode::FieldAccess { object: inner, field_name: inner_field, .. } => {
+                AstNode::FieldAccess {
+                    object: inner,
+                    field_name: inner_field,
+                    ..
+                } => {
                     assert_eq!(inner_field, "b");
                     assert!(matches!(&**inner, AstNode::Identifier(ref name, _) if name == "a"));
                 }
@@ -145,11 +156,17 @@ fn test_parse_method_call_no_args() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             assert!(arguments.is_empty());
             // function should be FieldAccess
             match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
+                AstNode::FieldAccess {
+                    object, field_name, ..
+                } => {
                     assert_eq!(field_name, "method");
                     assert!(matches!(&**object, AstNode::Identifier(ref name, _) if name == "obj"));
                 }
@@ -170,7 +187,11 @@ fn test_parse_method_call_with_args() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             assert_eq!(arguments.len(), 3);
             match &**function {
                 AstNode::FieldAccess { field_name, .. } => {
@@ -193,12 +214,20 @@ fn test_parse_builtin_object_method_call() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             assert_eq!(arguments.len(), 2);
             match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
+                AstNode::FieldAccess {
+                    object, field_name, ..
+                } => {
                     assert_eq!(field_name, "take_share");
-                    assert!(matches!(&**object, AstNode::Identifier(ref name, _) if name == "ClientStore"));
+                    assert!(
+                        matches!(&**object, AstNode::Identifier(ref name, _) if name == "ClientStore")
+                    );
                 }
                 _ => panic!("Expected FieldAccess as function"),
             }
@@ -224,11 +253,24 @@ fn test_parse_share_method_calls() {
         let statements = get_statements(ast);
 
         match &statements[0] {
-            AstNode::FunctionCall { function, arguments, .. } => {
-                assert_eq!(arguments.len(), expected_arg_count, "Wrong arg count for {}", source);
+            AstNode::FunctionCall {
+                function,
+                arguments,
+                ..
+            } => {
+                assert_eq!(
+                    arguments.len(),
+                    expected_arg_count,
+                    "Wrong arg count for {}",
+                    source
+                );
                 match &**function {
                     AstNode::FieldAccess { field_name, .. } => {
-                        assert_eq!(field_name, expected_method, "Wrong method name for {}", source);
+                        assert_eq!(
+                            field_name, expected_method,
+                            "Wrong method name for {}",
+                            source
+                        );
                     }
                     _ => panic!("Expected FieldAccess for {}", source),
                 }
@@ -255,18 +297,24 @@ fn test_parse_chained_method_calls() {
     match &statements[0] {
         AstNode::FunctionCall { function, .. } => {
             match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
+                AstNode::FieldAccess {
+                    object, field_name, ..
+                } => {
                     assert_eq!(field_name, "second");
                     // Inner should be a.first()
                     match &**object {
-                        AstNode::FunctionCall { function: inner_func, .. } => {
-                            match &**inner_func {
-                                AstNode::FieldAccess { field_name: inner_method, .. } => {
-                                    assert_eq!(inner_method, "first");
-                                }
-                                _ => panic!("Expected inner FieldAccess"),
+                        AstNode::FunctionCall {
+                            function: inner_func,
+                            ..
+                        } => match &**inner_func {
+                            AstNode::FieldAccess {
+                                field_name: inner_method,
+                                ..
+                            } => {
+                                assert_eq!(inner_method, "first");
                             }
-                        }
+                            _ => panic!("Expected inner FieldAccess"),
+                        },
                         _ => panic!("Expected inner FunctionCall"),
                     }
                 }
@@ -291,10 +339,16 @@ fn test_parse_field_access_in_binary_expr() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::BinaryOperation { left, right, op, .. } => {
+        AstNode::BinaryOperation {
+            left, right, op, ..
+        } => {
             assert_eq!(op, "+");
-            assert!(matches!(&**left, AstNode::FieldAccess { field_name, .. } if field_name == "x"));
-            assert!(matches!(&**right, AstNode::FieldAccess { field_name, .. } if field_name == "y"));
+            assert!(
+                matches!(&**left, AstNode::FieldAccess { field_name, .. } if field_name == "x")
+            );
+            assert!(
+                matches!(&**right, AstNode::FieldAccess { field_name, .. } if field_name == "y")
+            );
         }
         _ => panic!("Expected BinaryOperation"),
     }
@@ -324,8 +378,8 @@ fn test_parse_method_call_in_variable_decl() {
 }
 
 #[test]
-fn test_parse_builtin_method_in_secret_decl() {
-    let source = "secret var share = ClientStore.take_share(0, 1)";
+fn test_parse_builtin_method_in_inferred_share_decl() {
+    let source = "var share = ClientStore.take_share(0, 1)";
     let tokens = tokenize(source, "test.stfl").unwrap();
     let ast = parse(&tokens, "test.stfl").unwrap();
 
@@ -333,9 +387,8 @@ fn test_parse_builtin_method_in_secret_decl() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::VariableDeclaration { name, is_secret, value, .. } => {
+        AstNode::VariableDeclaration { name, value, .. } => {
             assert_eq!(name, "share");
-            assert!(*is_secret);
             assert!(value.is_some());
         }
         _ => panic!("Expected VariableDeclaration"),
@@ -358,7 +411,9 @@ fn test_parse_index_on_field() {
     match &statements[0] {
         AstNode::IndexAccess { base, .. } => {
             // base should be obj.array (FieldAccess)
-            assert!(matches!(&**base, AstNode::FieldAccess { field_name, .. } if field_name == "array"));
+            assert!(
+                matches!(&**base, AstNode::FieldAccess { field_name, .. } if field_name == "array")
+            );
         }
         _ => panic!("Expected IndexAccess, got {:?}", statements[0]),
     }
@@ -374,15 +429,15 @@ fn test_parse_method_call_on_index_result() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, .. } => {
-            match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
-                    assert_eq!(field_name, "method");
-                    assert!(matches!(&**object, AstNode::IndexAccess { .. }));
-                }
-                _ => panic!("Expected FieldAccess"),
+        AstNode::FunctionCall { function, .. } => match &**function {
+            AstNode::FieldAccess {
+                object, field_name, ..
+            } => {
+                assert_eq!(field_name, "method");
+                assert!(matches!(&**object, AstNode::IndexAccess { .. }));
             }
-        }
+            _ => panic!("Expected FieldAccess"),
+        },
         _ => panic!("Expected FunctionCall"),
     }
 }
@@ -403,8 +458,12 @@ fn test_parse_field_access_as_argument() {
     match &statements[0] {
         AstNode::FunctionCall { arguments, .. } => {
             assert_eq!(arguments.len(), 2);
-            assert!(matches!(&arguments[0], AstNode::FieldAccess { field_name, .. } if field_name == "x"));
-            assert!(matches!(&arguments[1], AstNode::FieldAccess { field_name, .. } if field_name == "y"));
+            assert!(
+                matches!(&arguments[0], AstNode::FieldAccess { field_name, .. } if field_name == "x")
+            );
+            assert!(
+                matches!(&arguments[1], AstNode::FieldAccess { field_name, .. } if field_name == "y")
+            );
         }
         _ => panic!("Expected FunctionCall"),
     }
@@ -420,7 +479,11 @@ fn test_parse_method_call_as_argument() {
     assert_eq!(statements.len(), 1);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             assert!(matches!(&**function, AstNode::Identifier(name, _) if name == "outer"));
             assert_eq!(arguments.len(), 1);
             assert!(matches!(&arguments[0], AstNode::FunctionCall { .. }));
@@ -446,10 +509,15 @@ fn test_parse_return_field_access() {
             let body_statements = get_statements((**body).clone());
             assert!(!body_statements.is_empty());
             match &body_statements[0] {
-                AstNode::Return { value: Some(expr), .. } => {
+                AstNode::Return {
+                    value: Some(expr), ..
+                } => {
                     assert!(matches!(&**expr, AstNode::FieldAccess { .. }));
                 }
-                _ => panic!("Expected Return with FieldAccess, got {:?}", body_statements[0]),
+                _ => panic!(
+                    "Expected Return with FieldAccess, got {:?}",
+                    body_statements[0]
+                ),
             }
         }
         _ => panic!("Expected FunctionDefinition"),
@@ -468,7 +536,9 @@ fn test_parse_return_method_call() {
         AstNode::FunctionDefinition { body, .. } => {
             let body_statements = get_statements((**body).clone());
             match &body_statements[0] {
-                AstNode::Return { value: Some(expr), .. } => {
+                AstNode::Return {
+                    value: Some(expr), ..
+                } => {
                     assert!(matches!(&**expr, AstNode::FunctionCall { .. }));
                 }
                 _ => panic!("Expected Return with FunctionCall"),
@@ -511,7 +581,9 @@ fn test_parse_while_with_field_access() {
     let statements = get_statements(ast);
 
     match &statements[0] {
-        AstNode::WhileLoop { condition, body, .. } => {
+        AstNode::WhileLoop {
+            condition, body, ..
+        } => {
             assert!(matches!(&**condition, AstNode::FieldAccess { .. }));
             // body is a Block or single statement
             let body_statements = get_statements((**body).clone());
@@ -536,7 +608,9 @@ fn test_parse_assignment_to_field() {
 
     match &statements[0] {
         AstNode::Assignment { target, value, .. } => {
-            assert!(matches!(&**target, AstNode::FieldAccess { field_name, .. } if field_name == "field"));
+            assert!(
+                matches!(&**target, AstNode::FieldAccess { field_name, .. } if field_name == "field")
+            );
             assert!(matches!(&**value, AstNode::Literal(_)));
         }
         _ => panic!("Expected Assignment, got {:?}", statements[0]),
@@ -566,7 +640,8 @@ fn test_parse_assignment_method_result_to_var() {
 
 #[test]
 fn test_parse_multiple_method_calls() {
-    let source = "var a = Share.from_clear(1)\nvar b = Share.from_clear(2)\nvar c = Share.add(a, b)";
+    let source =
+        "var a = Share.from_clear(1)\nvar b = Share.from_clear(2)\nvar c = Share.add(a, b)";
     let tokens = tokenize(source, "test.stfl").unwrap();
     let ast = parse(&tokens, "test.stfl").unwrap();
 
@@ -587,9 +662,15 @@ fn test_parse_object_method_with_string_arg() {
     let statements = get_statements(ast);
 
     match &statements[0] {
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
+                AstNode::FieldAccess {
+                    object, field_name, ..
+                } => {
                     assert!(matches!(&**object, AstNode::Identifier(name, _) if name == "Rbc"));
                     assert_eq!(field_name, "broadcast");
                 }
@@ -611,7 +692,10 @@ fn test_parse_error_dot_without_field() {
     let tokens = tokenize(source, "test.stfl").unwrap();
     let result = parse(&tokens, "test.stfl");
 
-    assert!(result.is_err(), "Should fail when dot is not followed by identifier");
+    assert!(
+        result.is_err(),
+        "Should fail when dot is not followed by identifier"
+    );
 }
 
 #[test]
@@ -676,10 +760,14 @@ fn test_parse_nested_field_access_with_method() {
     match &statements[0] {
         AstNode::FunctionCall { function, .. } => {
             match &**function {
-                AstNode::FieldAccess { object, field_name, .. } => {
+                AstNode::FieldAccess {
+                    object, field_name, ..
+                } => {
                     assert_eq!(field_name, "method");
                     // object should be a.b.c (nested FieldAccess)
-                    assert!(matches!(&**object, AstNode::FieldAccess { field_name, .. } if field_name == "c"));
+                    assert!(
+                        matches!(&**object, AstNode::FieldAccess { field_name, .. } if field_name == "c")
+                    );
                 }
                 _ => panic!("Expected FieldAccess"),
             }
@@ -698,15 +786,17 @@ fn test_parse_parenthesized_field_access_in_expression() {
     let statements = get_statements(ast);
 
     match &statements[0] {
-        AstNode::VariableDeclaration { value: Some(val), .. } => {
-            match &**val {
-                AstNode::FieldAccess { object, field_name, .. } => {
-                    assert_eq!(field_name, "field");
-                    assert!(matches!(&**object, AstNode::Identifier(name, _) if name == "obj"));
-                }
-                _ => panic!("Expected FieldAccess in value"),
+        AstNode::VariableDeclaration {
+            value: Some(val), ..
+        } => match &**val {
+            AstNode::FieldAccess {
+                object, field_name, ..
+            } => {
+                assert_eq!(field_name, "field");
+                assert!(matches!(&**object, AstNode::Identifier(name, _) if name == "obj"));
             }
-        }
+            _ => panic!("Expected FieldAccess in value"),
+        },
         _ => panic!("Expected VariableDeclaration"),
     }
 }

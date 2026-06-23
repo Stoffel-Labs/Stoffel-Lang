@@ -1,0 +1,24 @@
+# Local risk queue example.
+#
+# Uses append, push, length, and len aliases while modeling a small ranked queue
+# of review scores.
+
+def main() -> int64:
+  var review_scores: List[int64] = []
+  discard review_scores.append(72)
+  discard review_scores.push(41)
+  discard review_scores.append(93)
+  discard review_scores.push(65)
+
+  review_scores[1] = review_scores[1] + 10
+
+  var total: int64 = 0
+  var high_priority: int64 = 0
+
+  for score in review_scores:
+    total += score
+    if score >= 70:
+      high_priority += 1
+
+  var alias_count_check: int64 = review_scores.len() + review_scores.length()
+  return total + (high_priority * 100) + alias_count_check
