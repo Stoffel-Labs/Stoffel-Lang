@@ -2,7 +2,7 @@
 import helpers
 import constants
 
-main main() -> int64:
+def main() -> int64:
   var pi = get_pi_approx()
   var squared = square(pi)
   return squared

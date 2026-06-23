@@ -1,16 +1,47 @@
 use crate::ast::{AstNode, Pragma};
 use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant, Instruction};
 use crate::errors::{CompilerError, CompilerResult};
-use crate::register_allocator::{self, AllocationError, VirtualRegister, PhysicalRegister};
+use crate::register_allocator::{self, AllocationError, PhysicalRegister, VirtualRegister};
 use crate::symbol_table::SymbolType;
+use stoffel_vm_types::compiled_binary::{ClientIoManifest, ClientIoSchema, MpcBackend};
+use stoffel_vm_types::core_types::ShareType;
+use stoffel_vm_types::registers::DEFAULT_SECRET_REGISTER_START;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-const MAX_REGISTERS: usize = 32; // Example limit
-const SECRET_REGISTER_START: usize = MAX_REGISTERS / 2; // Registers >= this are secret
+const SECRET_REGISTER_START: usize = DEFAULT_SECRET_REGISTER_START;
+const MAX_REGISTERS: usize = SECRET_REGISTER_START * 2;
 
 /// It receives the generator state, the function definition node, and the pragma node.
 type PragmaHandler = fn(&mut CodeGenerator, &AstNode, &Pragma) -> CompilerResult<()>;
+
+fn int_literal_u64(node: Option<&AstNode>) -> Option<u64> {
+    match node {
+        Some(AstNode::Literal(crate::ast::Value::Int { value, .. })) => u64::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+fn infer_single_share_type(node: &AstNode) -> Option<ShareType> {
+    match node {
+        AstNode::FunctionCall { function, .. } => match function.as_ref() {
+            AstNode::Identifier(name, _) if name == "ClientStore.take_share_fixed" => {
+                Some(ShareType::default_secret_fixed_point())
+            }
+            AstNode::Identifier(name, _) if name == "ClientStore.take_share" => {
+                Some(ShareType::default_secret_int())
+            }
+            AstNode::Identifier(name, _) if name.ends_with("from_clear_fixed") => {
+                Some(ShareType::default_secret_fixed_point())
+            }
+            AstNode::Identifier(name, _) if name.ends_with("from_clear_int") => {
+                Some(ShareType::default_secret_int())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 #[derive(Debug)]
 struct CodeGenerator {
@@ -24,11 +55,13 @@ struct CodeGenerator {
     vr_secrecy: HashMap<VirtualRegister, bool>,
     // Variable symbol table (maps name to VirtualRegister index). Local to the current scope.
     symbol_table: HashMap<String, usize>,
+    // Source-level types for variables in this scope.
+    symbol_types: HashMap<String, SymbolType>,
     // Compiled functions.
     compiled_functions: HashMap<String, BytecodeChunk>,
-    // If present, this chunk represents a legacy 'def main' without return type to be used as program entry.
+    // If present, this chunk represents `def main(...)` promoted to the program entry.
     main_proc_chunk: Option<BytecodeChunk>,
-    // If present, this chunk represents the explicit entry function compiled via 'main <name>(...)'
+    // If present, this chunk represents a pragma-marked entry function.
     entry_main_chunk: Option<BytecodeChunk>,
     // Known built-in functions (names only, no bytecode generated).
     known_builtins: HashSet<String>,
@@ -36,63 +69,15 @@ struct CodeGenerator {
     pragma_handlers: HashMap<String, PragmaHandler>,
     // Constants identified during code generation for this chunk.
     identified_constants: Vec<Constant>,
+    client_inputs: HashMap<u64, Vec<Option<ShareType>>>,
+    client_outputs: HashMap<u64, Vec<ShareType>>,
+    variable_share_types: HashMap<String, ShareType>,
+    variable_share_lists: HashMap<String, Vec<ShareType>>,
 }
 
 impl CodeGenerator {
     fn new() -> Self {
-        let mut known_builtins = HashSet::new();
-        known_builtins.insert("print".to_string());
-        // VM foreign functions for object/array manipulation
-        known_builtins.insert("create_object".to_string());
-        known_builtins.insert("create_array".to_string());
-        known_builtins.insert("get_field".to_string());
-        known_builtins.insert("set_field".to_string());
-        known_builtins.insert("array_push".to_string());
-        known_builtins.insert("array_length".to_string());
-        // ClientStore builtin object methods (qualified names)
-        known_builtins.insert("ClientStore.take_share".to_string());
-        known_builtins.insert("ClientStore.take_share_fixed".to_string());
-        known_builtins.insert("ClientStore.get_number_clients".to_string());
-
-        // Share builtin object methods (matches VM mpc_builtins.rs)
-        known_builtins.insert("Share.from_clear".to_string());
-        known_builtins.insert("Share.from_clear_int".to_string());
-        known_builtins.insert("Share.from_clear_fixed".to_string());
-        known_builtins.insert("Share.add".to_string());
-        known_builtins.insert("Share.sub".to_string());
-        known_builtins.insert("Share.neg".to_string());
-        known_builtins.insert("Share.add_scalar".to_string());
-        known_builtins.insert("Share.mul_scalar".to_string());
-        known_builtins.insert("Share.mul".to_string());
-        known_builtins.insert("Share.open".to_string());
-        known_builtins.insert("Share.send_to_client".to_string());
-        known_builtins.insert("Share.interpolate_local".to_string());
-        known_builtins.insert("Share.get_type".to_string());
-        known_builtins.insert("Share.get_party_id".to_string());
-
-        // Mpc builtin object methods (MPC engine info)
-        known_builtins.insert("Mpc.party_id".to_string());
-        known_builtins.insert("Mpc.n_parties".to_string());
-        known_builtins.insert("Mpc.threshold".to_string());
-        known_builtins.insert("Mpc.is_ready".to_string());
-        known_builtins.insert("Mpc.instance_id".to_string());
-
-        // Rbc builtin object methods (Reliable Broadcast)
-        known_builtins.insert("Rbc.broadcast".to_string());
-        known_builtins.insert("Rbc.receive".to_string());
-        known_builtins.insert("Rbc.receive_any".to_string());
-
-        // Aba builtin object methods (Asynchronous Binary Agreement)
-        known_builtins.insert("Aba.propose".to_string());
-        known_builtins.insert("Aba.result".to_string());
-        known_builtins.insert("Aba.propose_and_wait".to_string());
-
-        // Share.batch_open (was missing)
-        known_builtins.insert("Share.batch_open".to_string());
-
-        // ConsensusValue builtin object methods
-        known_builtins.insert("ConsensusValue.propose".to_string());
-        known_builtins.insert("ConsensusValue.get".to_string());
+        let known_builtins = crate::builtin_registry::builtin_registry().known_call_names();
 
         CodeGenerator {
             current_instructions: Vec::new(),
@@ -101,12 +86,17 @@ impl CodeGenerator {
             vr_secrecy: HashMap::new(),
             // Symbol table starts empty for each new generator instance (e.g., per function)
             symbol_table: HashMap::new(),
+            symbol_types: HashMap::new(),
             compiled_functions: HashMap::new(),
             main_proc_chunk: None,
             entry_main_chunk: None,
             known_builtins,
             pragma_handlers: Self::register_pragma_handlers(),
             identified_constants: Vec::new(),
+            client_inputs: HashMap::new(),
+            client_outputs: HashMap::new(),
+            variable_share_types: HashMap::new(),
+            variable_share_lists: HashMap::new(),
         }
     }
 
@@ -134,10 +124,221 @@ impl CodeGenerator {
         self.current_instructions.push(instruction);
     }
 
+    fn record_client_io_call(&mut self, function_name: &str, arguments: &[AstNode]) {
+        match function_name {
+            "ClientStore.take_share" | "ClientStore.take_share_fixed" => {
+                let Some(client_slot) = int_literal_u64(arguments.first()) else {
+                    return;
+                };
+                let Some(input_ordinal) = int_literal_u64(arguments.get(1)) else {
+                    return;
+                };
+                let share_type = if function_name == "ClientStore.take_share_fixed" {
+                    ShareType::default_secret_fixed_point()
+                } else {
+                    ShareType::default_secret_int()
+                };
+                let inputs = self.client_inputs.entry(client_slot).or_default();
+                let ordinal = input_ordinal as usize;
+                if inputs.len() <= ordinal {
+                    inputs.resize(ordinal + 1, None);
+                }
+                inputs[ordinal] = Some(share_type);
+            }
+            "MpcOutput.send_to_client" => {
+                let Some(client_slot) = int_literal_u64(arguments.first()) else {
+                    return;
+                };
+                if let Some(value) = arguments.get(1) {
+                    let outputs = self.output_share_types_for_node(value);
+                    self.client_outputs
+                        .entry(client_slot)
+                        .or_default()
+                        .extend(outputs);
+                }
+            }
+            "send_to_client" => {
+                let Some(client_slot) = int_literal_u64(arguments.get(1)) else {
+                    return;
+                };
+                let share_type = arguments
+                    .first()
+                    .and_then(|argument| self.share_type_for_node(argument))
+                    .unwrap_or_else(ShareType::default_secret_int);
+                self.client_outputs
+                    .entry(client_slot)
+                    .or_default()
+                    .push(share_type);
+            }
+            _ => {}
+        }
+    }
+
+    fn share_type_for_node(&self, node: &AstNode) -> Option<ShareType> {
+        match node {
+            AstNode::Identifier(name, _) => self.variable_share_types.get(name).copied(),
+            AstNode::FunctionCall { .. } => infer_single_share_type(node),
+            AstNode::BinaryOperation { left, right, .. } => {
+                let left = self.share_type_for_node(left);
+                let right = self.share_type_for_node(right);
+                match (left, right) {
+                    (
+                        Some(ShareType::SecretFixedPoint { precision }),
+                        Some(ShareType::SecretFixedPoint { .. }),
+                    )
+                    | (
+                        Some(ShareType::SecretFixedPoint { precision }),
+                        Some(ShareType::SecretInt { .. }),
+                    )
+                    | (
+                        Some(ShareType::SecretInt { .. }),
+                        Some(ShareType::SecretFixedPoint { precision }),
+                    ) => Some(ShareType::SecretFixedPoint { precision }),
+                    (Some(left), _) => Some(left),
+                    (_, Some(right)) => Some(right),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn output_share_types_for_node(&self, node: &AstNode) -> Vec<ShareType> {
+        match node {
+            AstNode::Identifier(name, _) => self
+                .variable_share_lists
+                .get(name)
+                .cloned()
+                .or_else(|| {
+                    self.variable_share_types
+                        .get(name)
+                        .copied()
+                        .map(|ty| vec![ty])
+                })
+                .unwrap_or_else(|| vec![ShareType::default_secret_int()]),
+            AstNode::ListLiteral(elements) => elements
+                .iter()
+                .map(|element| {
+                    self.share_type_for_node(element)
+                        .unwrap_or_else(ShareType::default_secret_int)
+                })
+                .collect(),
+            _ => vec![self
+                .share_type_for_node(node)
+                .unwrap_or_else(ShareType::default_secret_int)],
+        }
+    }
+
+    fn client_io_manifest(&self) -> ClientIoManifest {
+        let mut slots = self
+            .client_inputs
+            .keys()
+            .chain(self.client_outputs.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        slots.sort_unstable();
+        slots.dedup();
+
+        ClientIoManifest {
+            mpc_backend: MpcBackend::default(),
+            clients: slots
+                .into_iter()
+                .map(|client_slot| {
+                    let inputs = self
+                        .client_inputs
+                        .get(&client_slot)
+                        .map(|inputs| {
+                            inputs
+                                .iter()
+                                .map(|share_type| {
+                                    share_type.unwrap_or_else(ShareType::default_secret_int)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let outputs = self
+                        .client_outputs
+                        .get(&client_slot)
+                        .cloned()
+                        .unwrap_or_default();
+                    ClientIoSchema {
+                        client_slot,
+                        inputs,
+                        outputs,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn merge_client_io_from(&mut self, other: &CodeGenerator) {
+        for (client_slot, inputs) in &other.client_inputs {
+            let target = self.client_inputs.entry(*client_slot).or_default();
+            if target.len() < inputs.len() {
+                target.resize(inputs.len(), None);
+            }
+            for (idx, share_type) in inputs.iter().enumerate() {
+                if share_type.is_some() {
+                    target[idx] = *share_type;
+                }
+            }
+        }
+        for (client_slot, outputs) in &other.client_outputs {
+            self.client_outputs
+                .entry(*client_slot)
+                .or_default()
+                .extend(outputs.iter().copied());
+        }
+    }
+
     /// Adds a label pointing to the *next* instruction index.
     fn add_label(&mut self, label: String) {
         let pos = self.current_instructions.len();
         self.current_labels.insert(label, pos);
+    }
+
+    fn type_hint_for_node(&self, node: &AstNode) -> Option<SymbolType> {
+        match node {
+            AstNode::Identifier(name, _) => self.symbol_types.get(name).cloned(),
+            AstNode::FunctionCall {
+                resolved_return_type,
+                ..
+            } => resolved_return_type.clone(),
+            AstNode::Literal(value) => match value {
+                crate::ast::Value::Int { kind, .. } => match kind {
+                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W8)) => {
+                        Some(SymbolType::Int8)
+                    }
+                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W16)) => {
+                        Some(SymbolType::Int16)
+                    }
+                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W32)) => {
+                        Some(SymbolType::Int32)
+                    }
+                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W64)) => {
+                        Some(SymbolType::Int64)
+                    }
+                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W8)) => {
+                        Some(SymbolType::UInt8)
+                    }
+                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W16)) => {
+                        Some(SymbolType::UInt16)
+                    }
+                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W32)) => {
+                        Some(SymbolType::UInt32)
+                    }
+                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W64)) => {
+                        Some(SymbolType::UInt64)
+                    }
+                    None => Some(SymbolType::Int64),
+                },
+                crate::ast::Value::Float(_) => Some(SymbolType::Float),
+                crate::ast::Value::String(_) => Some(SymbolType::String),
+                crate::ast::Value::Bool(_) => Some(SymbolType::Bool),
+                crate::ast::Value::Nil => Some(SymbolType::Nil),
+            },
+            _ => None,
+        }
     }
 
     /// Compiles an AST node, returning the VirtualRegister holding the result
@@ -145,7 +346,8 @@ impl CodeGenerator {
     fn compile_node(&mut self, node: &AstNode) -> CompilerResult<(VirtualRegister, bool)> {
         match node {
             // --- Literals ---
-            AstNode::Literal(lit) => { // Literals are initially clear
+            AstNode::Literal(lit) => {
+                // Literals are initially clear
                 let vr = self.allocate_virtual_register(false); // Literals are clear
                 let constant = match lit {
                     crate::ast::Value::Int { value, kind } => {
@@ -165,7 +367,9 @@ impl CodeGenerator {
                             None => Constant::I64(*value as i64), // default behavior
                         }
                     }
-                    crate::ast::Value::Float(f) => Constant::Float(crate::bytecode::F64::new(f64::from_bits(*f))),
+                    crate::ast::Value::Float(f) => {
+                        Constant::Float(crate::bytecode::F64::new(f64::from_bits(*f)))
+                    }
                     crate::ast::Value::String(s) => Constant::String(s.clone()),
                     crate::ast::Value::Bool(b) => Constant::Bool(*b),
                     crate::ast::Value::Nil => Constant::Unit,
@@ -175,14 +379,16 @@ impl CodeGenerator {
                 let value = crate::core_types::Value::from(constant);
                 self.emit(Instruction::LDI(vr.0, value));
                 Ok((vr, false)) // Return VR and its secrecy (false)
-            },
+            }
             // --- Identifiers ---
-            AstNode::Identifier(name, location) => {
+            AstNode::Identifier(name, _location) => {
                 // Semantic analysis already verified this identifier exists.
                 // Look it up to get its register.
                 if let Some(&vr_index) = self.symbol_table.get(name) {
                     let vr = VirtualRegister(vr_index);
-                    let is_secret = *self.vr_secrecy.get(&vr)
+                    let is_secret = *self
+                        .vr_secrecy
+                        .get(&vr)
                         .expect("Identifier VR missing from secrecy map");
                     Ok((vr, is_secret))
                 } else {
@@ -192,53 +398,124 @@ impl CodeGenerator {
                         "Codegen failed: Symbol '{}' passed semantic analysis but not found in codegen symbol table", name
                     )))
                 }
-            },
-            AstNode::VariableDeclaration { name, value, type_annotation, is_mutable, is_secret, location } => {
+            }
+            AstNode::VariableDeclaration {
+                name,
+                value,
+                type_annotation,
+                is_mutable: _,
+                is_secret,
+                location: _,
+            } => {
                 // Determine if the initial value needs a secret register
-                // Secrecy comes from 'secret let/var' or a 'secret' type annotation.
+                // Secrecy comes from a `secret` type annotation.
                 // Semantic analysis should have ensured consistency if both are present.
-                let type_is_secret = type_annotation.as_ref().map_or(false, |n| SymbolType::from_ast(n).is_secret());
-                let needs_secret = *is_secret || type_is_secret;
+                let annotation_type = type_annotation.as_ref().map(|n| SymbolType::from_ast(n));
+                let value_type_hint = value
+                    .as_deref()
+                    .and_then(|expr| self.type_hint_for_node(expr));
+                let declared_type = annotation_type
+                    .clone()
+                    .or(value_type_hint.clone())
+                    .unwrap_or(SymbolType::Unknown);
+                let final_type = if declared_type.is_secret() || *is_secret {
+                    declared_type.with_secret_modifier()
+                } else {
+                    declared_type
+                };
+                let explicit_secret = final_type.uses_secret_register();
+                let value_share_type = value
+                    .as_deref()
+                    .and_then(|expr| self.share_type_for_node(expr));
+                let value_share_list = value.as_deref().and_then(|expr| match expr {
+                    AstNode::ListLiteral(elements) => Some(
+                        elements
+                            .iter()
+                            .map(|element| {
+                                self.share_type_for_node(element)
+                                    .unwrap_or_else(ShareType::default_secret_int)
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    AstNode::Identifier(identifier, _) => {
+                        self.variable_share_lists.get(identifier).cloned()
+                    }
+                    _ => None,
+                });
 
                 let (value_vr, value_is_secret) = match value {
                     Some(val_expr) => {
                         let (vr, is_sec) = self.compile_node(val_expr)?; // Compile the expression first
-                        // Check if value secrecy matches declaration requirement
-                        if is_sec != needs_secret { // Implicit hide/reveal via MOV
-                            let target_vr = self.allocate_virtual_register(needs_secret);
-                            self.emit(Instruction::MOV(target_vr.0, vr.0));
-                            (target_vr, needs_secret) // Variable gets the new VR
-                        } else {
-                            (vr, is_sec) // Secrecy matches, use the value's VR directly
-                        }
+                        let needs_secret = explicit_secret || is_sec;
+                        let target_vr = self.allocate_virtual_register(needs_secret);
+                        self.emit(Instruction::MOV(target_vr.0, vr.0));
+                        (target_vr, needs_secret)
                     }
-                    None => { // No initial value, load default (Nil for now)
-                        let vr = self.allocate_virtual_register(needs_secret);
+                    None => {
+                        // No initial value, load default (Nil for now)
+                        let vr = self.allocate_virtual_register(explicit_secret);
                         self.identified_constants.push(Constant::Unit);
-                                                self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit)); // Load Unit
-                        (vr, needs_secret)
+                        self.emit(Instruction::LDI(vr.0, crate::core_types::Value::Unit)); // Load Unit
+                        (vr, explicit_secret)
                     }
                 };
 
                 // Store the variable name and its register in the symbol table.
                 self.symbol_table.insert(name.clone(), value_vr.0);
+                self.symbol_types.insert(name.clone(), final_type);
+                if let Some(share_types) = value_share_list {
+                    self.variable_share_lists.insert(name.clone(), share_types);
+                    self.variable_share_types.remove(name);
+                } else if let Some(share_type) = value_share_type {
+                    self.variable_share_types.insert(name.clone(), share_type);
+                    self.variable_share_lists.remove(name);
+                } else {
+                    self.variable_share_types.remove(name);
+                    self.variable_share_lists.remove(name);
+                }
                 // Update vr_secrecy map for this VR to ensure it has the correct flag
-                self.vr_secrecy.insert(value_vr, needs_secret);
+                self.vr_secrecy.insert(value_vr, value_is_secret);
 
-                Ok((value_vr, needs_secret)) // Return the VR holding the initial value and its secrecy
-            },
+                Ok((value_vr, value_is_secret)) // Return the VR holding the initial value and its secrecy
+            }
             // --- Operations ---
-            AstNode::UnaryOperation { op, operand, location } => {
+            AstNode::UnaryOperation {
+                op,
+                operand,
+                location,
+            } => {
                 let (operand_vr, operand_is_secret) = self.compile_node(operand)?;
                 let result_is_secret = operand_is_secret; // Unary ops preserve secrecy
                 let dest_vr = self.allocate_virtual_register(result_is_secret);
 
-                // TODO: Implement specific unary instructions (NEG, NOT)
-                self.emit(Instruction::MOV(dest_vr.0, operand_vr.0));
+                match op.as_str() {
+                    "-" => {
+                        let zero_vr = self.allocate_virtual_register(false);
+                        self.identified_constants.push(Constant::I64(0));
+                        self.emit(Instruction::LDI(
+                            zero_vr.0,
+                            crate::core_types::Value::from(Constant::I64(0)),
+                        ));
+                        self.emit(Instruction::SUB(dest_vr.0, zero_vr.0, operand_vr.0));
+                    }
+                    "not" => self.emit(Instruction::NOT(dest_vr.0, operand_vr.0)),
+                    _ => {
+                        return Err(CompilerError::semantic_error(
+                            format!("Unsupported unary operator: {}", op),
+                            location.clone(),
+                        )
+                        .with_hint("Supported unary operators are: - and not"))
+                    }
+                }
 
                 Ok((dest_vr, result_is_secret))
-            },
-            AstNode::BinaryOperation { op, left, right, location } => {
+            }
+            AstNode::BinaryOperation {
+                op,
+                left,
+                right,
+                location,
+            } => {
                 let (left_vr, left_is_secret) = self.compile_node(left)?;
                 let (right_vr, right_is_secret) = self.compile_node(right)?;
 
@@ -336,28 +613,44 @@ impl CodeGenerator {
                         Ok((bool_dest_vr, result_is_secret))
                     },
                     _ => Err(CompilerError::semantic_error(format!("Unsupported binary operator: {}", op), location.clone())
-                        .with_hint(format!("Supported operators are: +, -, *, /, ==, !=, <, <=, >, >="))),
+                        .with_hint("Supported operators are: +, -, *, /, ==, !=, <, <=, >, >=".to_string())),
                 }
-            },
+            }
             // --- Assignment ---
-            AstNode::Assignment { target, value, location } => {
+            AstNode::Assignment {
+                target,
+                value,
+                location,
+            } => {
                 match target.as_ref() {
-                    AstNode::Identifier(name, target_loc) => {
-                        let (value_vr, value_is_secret) = self.compile_node(value)?;
-                        let dest_vr_index = self.symbol_table.get(name).cloned().ok_or_else(|| CompilerError::internal_error(format!("Assignment target '{}' not found in symbol table", name)))?;
+                    AstNode::Identifier(name, _target_loc) => {
+                        let (value_vr, _value_is_secret) = self.compile_node(value)?;
+                        let dest_vr_index =
+                            self.symbol_table.get(name).cloned().ok_or_else(|| {
+                                CompilerError::internal_error(format!(
+                                    "Assignment target '{}' not found in symbol table",
+                                    name
+                                ))
+                            })?;
                         // The MOV instruction implicitly handles potential hide/reveal
                         // based on the source and destination register halves.
                         self.emit(Instruction::MOV(dest_vr_index, value_vr.0));
 
                         // The destination VR retains its original secrecy property,
                         let dest_vr = VirtualRegister(dest_vr_index);
-                        let dest_is_secret = *self.vr_secrecy.get(&dest_vr)
+                        let dest_is_secret = *self
+                            .vr_secrecy
+                            .get(&dest_vr)
                             .expect("Destination VR missing from secrecy map in assignment");
 
                         // Assignment itself doesn't produce a value/register to be used further.
                         Ok((dest_vr, dest_is_secret))
                     }
-                    AstNode::FieldAccess { object, field_name, location: _ } => {
+                    AstNode::FieldAccess {
+                        object,
+                        field_name,
+                        location: _,
+                    } => {
                         // Compile object and value
                         let (obj_vr, _obj_is_secret) = self.compile_node(object)?;
                         let (val_vr, val_is_secret) = self.compile_node(value)?;
@@ -366,7 +659,10 @@ impl CodeGenerator {
                         let field_const = Constant::String(field_name.clone());
                         self.identified_constants.push(field_const.clone());
                         let field_vr = self.allocate_virtual_register(false);
-                        self.emit(Instruction::LDI(field_vr.0, crate::core_types::Value::from(field_const)));
+                        self.emit(Instruction::LDI(
+                            field_vr.0,
+                            crate::core_types::Value::from(field_const),
+                        ));
 
                         // Call set_field(object, field_name, value)
                         self.emit(Instruction::PUSHARG(obj_vr.0));
@@ -376,7 +672,11 @@ impl CodeGenerator {
 
                         Ok((val_vr, val_is_secret))
                     }
-                    AstNode::IndexAccess { base, index, location: _ } => {
+                    AstNode::IndexAccess {
+                        base,
+                        index,
+                        location: _,
+                    } => {
                         // Compile base, index, and value
                         let (base_vr, _base_is_secret) = self.compile_node(base)?;
                         let (idx_vr, _idx_is_secret) = self.compile_node(index)?;
@@ -390,26 +690,83 @@ impl CodeGenerator {
 
                         Ok((val_vr, val_is_secret))
                     }
-                    _ => Err(CompilerError::semantic_error("Invalid assignment target", location.clone())),
+                    _ => Err(CompilerError::semantic_error(
+                        "Invalid assignment target",
+                        location.clone(),
+                    )),
                 }
-            },
+            }
             // --- Control Flow & Functions ---
-            AstNode::FunctionCall { function, arguments, location, resolved_return_type } => {
+            AstNode::FunctionCall {
+                function,
+                arguments,
+                location: _,
+                resolved_return_type,
+            } => {
+                if let (
+                    AstNode::Identifier(function_name, _),
+                    Some(SymbolType::Object(object_name)),
+                ) = (function.as_ref(), resolved_return_type.as_ref())
+                {
+                    if function_name == object_name
+                        && arguments
+                            .iter()
+                            .all(|arg| matches!(arg, AstNode::NamedArgument { .. }))
+                    {
+                        self.emit(Instruction::CALL("create_object".to_string()));
+
+                        let obj_vr = self.allocate_virtual_register(false);
+                        self.emit(Instruction::MOV(obj_vr.0, 0));
+
+                        for arg in arguments {
+                            let AstNode::NamedArgument {
+                                name: field_name,
+                                value,
+                                ..
+                            } = arg
+                            else {
+                                unreachable!("constructor arguments were checked above");
+                            };
+
+                            let (value_vr, _value_is_secret) = self.compile_node(value)?;
+
+                            let field_const = Constant::String(field_name.clone());
+                            self.identified_constants.push(field_const.clone());
+                            let field_vr = self.allocate_virtual_register(false);
+                            self.emit(Instruction::LDI(
+                                field_vr.0,
+                                crate::core_types::Value::from(field_const),
+                            ));
+
+                            self.emit(Instruction::PUSHARG(obj_vr.0));
+                            self.emit(Instruction::PUSHARG(field_vr.0));
+                            self.emit(Instruction::PUSHARG(value_vr.0));
+                            self.emit(Instruction::CALL("set_field".to_string()));
+                        }
+
+                        return Ok((obj_vr, false));
+                    }
+                }
+
                 // 1. Identify the function name
                 // Semantic analysis already verified the function exists and is callable.
-                let raw_function_name = match function.as_ref() {
-                    AstNode::Identifier(name, _) => name.clone(),
-                    // Semantic analysis should have caught non-identifier calls if unsupported
-                    _ => return Err(CompilerError::internal_error(
-                        "Codegen expected identifier for function call after semantic analysis".to_string())),
-                };
+                let raw_function_name =
+                    match function.as_ref() {
+                        AstNode::Identifier(name, _) => name.clone(),
+                        // Semantic analysis should have caught non-identifier calls if unsupported
+                        _ => return Err(CompilerError::internal_error(
+                            "Codegen expected identifier for function call after semantic analysis"
+                                .to_string(),
+                        )),
+                    };
 
-                // 2. Map Pythonic aliases to actual VM function names
-                let function_name = match raw_function_name.as_str() {
-                    "append" | "push" => "array_push".to_string(),
-                    "length" | "len" => "array_length".to_string(),
-                    _ => raw_function_name,
-                };
+                // 2. Map source-level builtin aliases to actual VM function names.
+                let function_name = crate::builtin_registry::builtin_registry()
+                    .vm_symbol_for_call(&raw_function_name)
+                    .map(str::to_string)
+                    .unwrap_or(raw_function_name);
+
+                self.record_client_io_call(&function_name, arguments);
 
                 // 3. Compile arguments first (do NOT emit PUSHARG yet) to keep PUSHARGs contiguous before CALL
                 let mut arg_vrs = Vec::with_capacity(arguments.len());
@@ -423,10 +780,12 @@ impl CodeGenerator {
                 }
 
                 // 4. Determine result type and secrecy from resolved type (added by semantic analysis)
-                let return_type = resolved_return_type.as_ref().cloned()
+                let return_type = resolved_return_type
+                    .as_ref()
+                    .cloned()
                     .unwrap_or(SymbolType::Unknown);
 
-                let result_is_secret = return_type.is_secret();
+                let result_is_secret = return_type.uses_secret_register();
                 let result_vr = self.allocate_virtual_register(result_is_secret);
 
                 self.emit(Instruction::CALL(function_name.clone()));
@@ -436,20 +795,32 @@ impl CodeGenerator {
                 }
 
                 Ok((result_vr, result_is_secret)) // Return the VR holding the result
-            },
-            AstNode::IfExpression { condition, then_branch, else_branch } => {
+            }
+            AstNode::NamedArgument { location, .. } => Err(CompilerError::internal_error(format!(
+                "Codegen received named argument outside object constructor at {}:{}",
+                location.line, location.column
+            ))),
+            AstNode::IfExpression {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 let (condition_vr, condition_is_secret) = self.compile_node(condition)?;
                 if condition_is_secret {
                     return Err(CompilerError::semantic_error(
                         "Cannot use secret value as condition in 'if'",
-                        condition.location()));
+                        condition.location(),
+                    ));
                 }
 
                 // Compare the boolean condition VR against Bool(false)
                 // Note: Condition itself is already boolean, but CMP sets flags for jumps.
                 let false_vr = self.allocate_virtual_register(false); // false is clear
                 self.identified_constants.push(Constant::Bool(false));
-                self.emit(Instruction::LDI(false_vr.0, crate::core_types::Value::Bool(false)));
+                self.emit(Instruction::LDI(
+                    false_vr.0,
+                    crate::core_types::Value::Bool(false),
+                ));
                 self.emit(Instruction::CMP(condition_vr.0, false_vr.0)); // Compare condition == false
 
                 let else_label = format!("else_{}", self.current_instructions.len());
@@ -461,7 +832,7 @@ impl CodeGenerator {
                 // --- Then Branch ---
                 let (then_vr, then_is_secret) = self.compile_node(then_branch)?;
                 // Provisional result register uses then-branch secrecy; may be updated after else
-                let mut result_is_secret = then_is_secret;
+                let result_is_secret = then_is_secret;
                 let result_vr = self.allocate_virtual_register(result_is_secret);
                 self.emit(Instruction::MOV(result_vr.0, then_vr.0));
                 // Skip else branch after executing then branch
@@ -490,7 +861,7 @@ impl CodeGenerator {
                 // --- End Label ---
                 self.add_label(end_label);
                 Ok((result_vr, final_result_is_secret))
-            },
+            }
             AstNode::Block(nodes) => {
                 let mut last_vr = self.allocate_virtual_register(false); // Default VR for empty block (clear)
                 let mut last_vr_is_secret = false;
@@ -498,7 +869,7 @@ impl CodeGenerator {
                     (last_vr, last_vr_is_secret) = self.compile_node(node)?;
                 }
                 Ok((last_vr, last_vr_is_secret))
-            },
+            }
             AstNode::Return { value, location: _ } => {
                 // Determine secrecy based on function signature's return type (TODO)
                 let (value_vr, value_is_secret) = match value {
@@ -514,20 +885,30 @@ impl CodeGenerator {
                 // Return the value directly from its virtual register; the VM will place it in caller's R0.
                 self.emit(Instruction::RET(value_vr.0));
                 Ok((value_vr, value_is_secret)) // Return VR, though RET is terminal
-            },
-            AstNode::DiscardStatement { expression, location } => {
+            }
+            AstNode::DiscardStatement {
+                expression,
+                location: _,
+            } => {
                 let (vr, is_secret) = self.compile_node(expression)?;
                 // The VR's live range ends here. Allocator handles it.
                 Ok((vr, is_secret)) // Return the VR, but its value isn't used further
-            },
-            AstNode::FieldAccess { object, field_name, location } => {
-                let (object_vr, object_is_secret) = self.compile_node(object)?;
+            }
+            AstNode::FieldAccess {
+                object,
+                field_name,
+                location: _,
+            } => {
+                let (object_vr, _object_is_secret) = self.compile_node(object)?;
 
                 // Load field name as string constant
                 let field_const = Constant::String(field_name.clone());
                 self.identified_constants.push(field_const.clone());
                 let field_vr = self.allocate_virtual_register(false);
-                self.emit(Instruction::LDI(field_vr.0, crate::core_types::Value::from(field_const)));
+                self.emit(Instruction::LDI(
+                    field_vr.0,
+                    crate::core_types::Value::from(field_const),
+                ));
 
                 // Call get_field(object, field_name)
                 self.emit(Instruction::PUSHARG(object_vr.0));
@@ -540,8 +921,12 @@ impl CodeGenerator {
                 self.emit(Instruction::MOV(result_vr.0, 0)); // Result is in r0
 
                 Ok((result_vr, result_is_secret))
-            },
-            AstNode::WhileLoop { condition, body, location } => {
+            }
+            AstNode::WhileLoop {
+                condition,
+                body,
+                location: _,
+            } => {
                 let loop_start_label = format!("loop_start_{}", self.current_instructions.len());
                 let end_loop_label = format!("loop_end_{}", self.current_instructions.len());
 
@@ -553,13 +938,17 @@ impl CodeGenerator {
                 if condition_is_secret {
                     return Err(CompilerError::semantic_error(
                         "Cannot use secret value as condition in 'while'",
-                        condition.location()));
+                        condition.location(),
+                    ));
                 }
 
                 // Compare the boolean condition VR against Bool(false)
                 let false_vr = self.allocate_virtual_register(false); // false is clear
                 self.identified_constants.push(Constant::Bool(false));
-                self.emit(Instruction::LDI(false_vr.0, crate::core_types::Value::Bool(false)));
+                self.emit(Instruction::LDI(
+                    false_vr.0,
+                    crate::core_types::Value::Bool(false),
+                ));
                 self.emit(Instruction::CMP(condition_vr.0, false_vr.0)); // Compare condition == false
 
                 self.emit(Instruction::JMPEQ(end_loop_label.clone()));
@@ -579,23 +968,39 @@ impl CodeGenerator {
                 self.identified_constants.push(Constant::Unit);
                 self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Unit));
                 Ok((nil_vr, false))
-            },
-            AstNode::ForLoop { variables, iterable, body, location } => {
+            }
+            AstNode::ForLoop {
+                variables,
+                iterable,
+                body,
+                location,
+            } => {
                 // Support: single var over range a .. b (inclusive) or over a list/array
                 if variables.len() != 1 {
-                    return Err(CompilerError::semantic_error("For-loop with multiple variables not supported yet", location.clone()));
+                    return Err(CompilerError::semantic_error(
+                        "For-loop with multiple variables not supported yet",
+                        location.clone(),
+                    ));
                 }
 
                 let var_name = variables[0].clone();
 
                 // Check if iterable is a range or a collection
                 match iterable.as_ref() {
-                    AstNode::BinaryOperation { op, left, right, location: _ } if op == ".." => {
+                    AstNode::BinaryOperation {
+                        op,
+                        left,
+                        right,
+                        location: _,
+                    } if op == ".." => {
                         // Range iteration: for i in start..end
                         let (start_vr, start_is_secret) = self.compile_node(left)?;
                         let (end_vr, end_is_secret) = self.compile_node(right)?;
                         if start_is_secret || end_is_secret {
-                            return Err(CompilerError::semantic_error("Secret values are not supported in for-loop range bounds", iterable.location()));
+                            return Err(CompilerError::semantic_error(
+                                "Secret values are not supported in for-loop range bounds",
+                                iterable.location(),
+                            ));
                         }
 
                         // Allocate loop variable (clear) and initialize with start
@@ -606,7 +1011,8 @@ impl CodeGenerator {
                         let prev_binding = self.symbol_table.insert(var_name.clone(), loop_vr.0);
 
                         // Labels
-                        let loop_start_label = format!("for_start_{}", self.current_instructions.len());
+                        let loop_start_label =
+                            format!("for_start_{}", self.current_instructions.len());
                         let loop_end_label = format!("for_end_{}", self.current_instructions.len());
 
                         // Start label
@@ -638,14 +1044,18 @@ impl CodeGenerator {
 
                         // Restore/cleanup symbol table mapping
                         match prev_binding {
-                            Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
-                            None => { self.symbol_table.remove(&variables[0]); }
+                            Some(old_idx) => {
+                                self.symbol_table.insert(var_name, old_idx);
+                            }
+                            None => {
+                                self.symbol_table.remove(&variables[0]);
+                            }
                         }
                     }
                     _ => {
                         // Collection iteration: for item in list
                         // Compile the collection expression
-                        let (collection_vr, collection_is_secret) = self.compile_node(&*iterable)?;
+                        let (collection_vr, collection_is_secret) = self.compile_node(iterable)?;
 
                         // Get the length of the collection: array_length(collection)
                         self.emit(Instruction::PUSHARG(collection_vr.0));
@@ -657,19 +1067,24 @@ impl CodeGenerator {
                         let index_vr = self.allocate_virtual_register(false);
                         let zero_vr = self.allocate_virtual_register(false);
                         self.identified_constants.push(Constant::I64(0));
-                        self.emit(Instruction::LDI(zero_vr.0, crate::core_types::Value::from(Constant::I64(0))));
+                        self.emit(Instruction::LDI(
+                            zero_vr.0,
+                            crate::core_types::Value::from(Constant::I64(0)),
+                        ));
                         self.emit(Instruction::MOV(index_vr.0, zero_vr.0));
 
-                        // Allocate the loop element variable.
-                        // Note: element secrecy may differ from collection secrecy (e.g., List[secret T]).
-                        // Conservatively treat loop elements as secret to avoid accidental declassification.
-                        let elem_vr = self.allocate_virtual_register(true);
+                        // Allocate the loop element variable in the same bank as the iterable.
+                        // The current bytecode does not carry element-level secrecy metadata, so
+                        // clear collections must stay in clear registers to avoid accidental MPC
+                        // execution during ordinary local loops.
+                        let elem_vr = self.allocate_virtual_register(collection_is_secret);
 
                         // Insert loop variable (element) into symbol table
                         let prev_binding = self.symbol_table.insert(var_name.clone(), elem_vr.0);
 
                         // Labels
-                        let loop_start_label = format!("for_start_{}", self.current_instructions.len());
+                        let loop_start_label =
+                            format!("for_start_{}", self.current_instructions.len());
                         let loop_end_label = format!("for_end_{}", self.current_instructions.len());
 
                         // Start label
@@ -692,11 +1107,15 @@ impl CodeGenerator {
                         // index = index + 1
                         let one_vr = self.allocate_virtual_register(false);
                         self.identified_constants.push(Constant::I64(1));
-                        self.emit(Instruction::LDI(one_vr.0, crate::core_types::Value::from(Constant::I64(1))));
+                        self.emit(Instruction::LDI(
+                            one_vr.0,
+                            crate::core_types::Value::from(Constant::I64(1)),
+                        ));
                         self.emit(Instruction::ADD(index_vr.0, index_vr.0, one_vr.0));
 
                         // Keep collection and length alive across the body
-                        let collection_keepalive = self.allocate_virtual_register(false);
+                        let collection_keepalive =
+                            self.allocate_virtual_register(collection_is_secret);
                         self.emit(Instruction::MOV(collection_keepalive.0, collection_vr.0));
                         let len_keepalive = self.allocate_virtual_register(false);
                         self.emit(Instruction::MOV(len_keepalive.0, len_vr.0));
@@ -709,8 +1128,12 @@ impl CodeGenerator {
 
                         // Restore/cleanup symbol table mapping
                         match prev_binding {
-                            Some(old_idx) => { self.symbol_table.insert(var_name, old_idx); },
-                            None => { self.symbol_table.remove(&variables[0]); }
+                            Some(old_idx) => {
+                                self.symbol_table.insert(var_name, old_idx);
+                            }
+                            None => {
+                                self.symbol_table.remove(&variables[0]);
+                            }
                         }
                     }
                 }
@@ -720,8 +1143,18 @@ impl CodeGenerator {
                 self.identified_constants.push(Constant::Unit);
                 self.emit(Instruction::LDI(nil_vr.0, crate::core_types::Value::Unit));
                 Ok((nil_vr, false))
-            },
-            AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
+            }
+            AstNode::FunctionDefinition {
+                name,
+                type_params,
+                parameters,
+                return_type: _,
+                body,
+                is_secret: _,
+                pragmas,
+                location,
+                node_id: _,
+            } => {
                 // --- Check for Pragmas ---
                 let mut skip_compilation = false;
                 for pragma in pragmas {
@@ -750,24 +1183,36 @@ impl CodeGenerator {
 
                 // --- Add parameters to the function_generator's symbol table ---
                 let mut param_vrs: Vec<VirtualRegister> = Vec::new();
-                for (i, param) in parameters.iter().enumerate() {
+                for param in parameters.iter() {
                     // Determine parameter secrecy from its type annotation
-                    let param_type = param.type_annotation.as_ref()
-                        .map(|n| SymbolType::from_ast(n))
+                    let param_type = param
+                        .type_annotation
+                        .as_ref()
+                        .map(|n| SymbolType::from_ast_with_type_params(n, type_params))
                         .unwrap_or(SymbolType::Unknown);
-                    let param_is_secret = param_type.is_secret();
+                    let param_is_secret = param_type.uses_secret_register();
                     // Allocate a virtual register for the parameter. These will typically
                     let param_vr = function_generator.allocate_virtual_register(param_is_secret);
-                    function_generator.symbol_table.insert(param.name.clone(), param_vr.0); // Store VR index
+                    function_generator
+                        .symbol_table
+                        .insert(param.name.clone(), param_vr.0); // Store VR index
+                    function_generator
+                        .symbol_types
+                        .insert(param.name.clone(), param_type);
                     param_vrs.push(param_vr);
                 }
 
                 // Compile the function body using the new generator.
                 let (_body_result_reg, _body_is_secret) = function_generator.compile_node(body)?;
+                self.merge_client_io_from(&function_generator);
 
                 // --- Perform Register Allocation ---
                 let virtual_instructions = function_generator.current_instructions;
-                let intervals = register_allocator::analyze_liveness_cfg_with_liveins(&virtual_instructions, &function_generator.current_labels, &param_vrs);
+                let intervals = register_allocator::analyze_liveness_cfg_with_liveins(
+                    &virtual_instructions,
+                    &function_generator.current_labels,
+                    &param_vrs,
+                );
                 let graph = register_allocator::build_interference_graph(&intervals);
 
                 let k_clear = SECRET_REGISTER_START;
@@ -780,7 +1225,13 @@ impl CodeGenerator {
                     precolored.insert(*vr, PhysicalRegister(i));
                 }
 
-                let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map, &precolored);
+                let allocation_result = register_allocator::color_graph(
+                    &graph,
+                    k_clear,
+                    k_secret,
+                    &secrecy_map,
+                    &precolored,
+                );
                 let allocation = match allocation_result {
                     Ok(alloc) => alloc,
                     Err(AllocationError::NeedsSpilling(spilled_vrs)) => {
@@ -790,26 +1241,35 @@ impl CodeGenerator {
                             name.as_deref().unwrap_or("<anon>"), spilled_vrs
                         )).with_hint("Spilling not yet implemented. Try simplifying the function."));
                     }
-                    Err(AllocationError::PoolExhausted(_, _)) => return Err(CompilerError::internal_error("Register allocation failed: Pool exhausted".to_string())),
+                    Err(AllocationError::PoolExhausted(_, _)) => {
+                        return Err(CompilerError::internal_error(
+                            "Register allocation failed: Pool exhausted".to_string(),
+                        ))
+                    }
                 };
 
                 // Rewrite instructions with physical registers
-                let final_instructions = register_allocator::rewrite_instructions(&virtual_instructions, &allocation);
+                let final_instructions =
+                    register_allocator::rewrite_instructions(&virtual_instructions, &allocation);
 
                 // Finalize the function's bytecode chunk.
                 let mut function_chunk = BytecodeChunk::new();
                 function_chunk.instructions = final_instructions;
                 function_chunk.labels = function_generator.current_labels; // TODO: Adjust label indices after rewrite/spilling?
-                function_chunk.constants = dedupe_constants(function_generator.identified_constants);
+                function_chunk.constants =
+                    dedupe_constants(function_generator.identified_constants);
+                function_chunk.parameters =
+                    parameters.iter().map(|param| param.name.clone()).collect();
+                function_chunk.upvalues = collect_upvalue_names(body);
 
                 // Store the compiled chunk appropriately.
                 if let Some(func_name) = name {
-                    if func_name == "main" && return_type.is_none() {
-                        // Legacy 'def main()' (no return type): candidate entry program chunk.
+                    if func_name == "main" {
+                        // `def main(...)` is the program entry.
                         if self.main_proc_chunk.is_some() {
                             return Err(CompilerError::semantic_error(
                                 "Multiple 'main' procedures defined".to_string(),
-                                location.clone()
+                                location.clone(),
                             ));
                         }
                         self.main_proc_chunk = Some(function_chunk);
@@ -817,29 +1277,44 @@ impl CodeGenerator {
                         // Detect explicit entry: allow pragma "entry" for now; otherwise store as normal function.
                         if self.compiled_functions.contains_key(func_name) {
                             // TODO: Allow overloading later?
-                            return Err(CompilerError::semantic_error(format!("Function '{}' already defined", func_name), location.clone()));
+                            return Err(CompilerError::semantic_error(
+                                format!("Function '{}' already defined", func_name),
+                                location.clone(),
+                            ));
                         }
-                        let is_entry = pragmas.iter().any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
+                        let is_entry = pragmas
+                            .iter()
+                            .any(|p| matches!(p, Pragma::Simple(n, _) if n == "entry"));
                         if is_entry {
                             if self.entry_main_chunk.is_some() {
                                 return Err(CompilerError::semantic_error(
                                     "Multiple explicit 'main' entries defined".to_string(),
                                     location.clone(),
-                                ).with_hint("Only one 'main <name>(...)' is allowed"));
+                                )
+                                .with_hint("Only one entry function is allowed"));
                             }
                             self.entry_main_chunk = Some(function_chunk.clone());
                         }
-                        self.compiled_functions.insert(func_name.clone(), function_chunk);
+                        self.compiled_functions
+                            .insert(func_name.clone(), function_chunk);
                     }
                 } else {
                     // TODO: Handle anonymous functions (lambdas)
-                    return Err(CompilerError::internal_error("Anonymous function definition not yet supported".to_string()));
+                    return Err(CompilerError::internal_error(
+                        "Anonymous function definition not yet supported".to_string(),
+                    ));
                 }
 
                 // Function definition itself doesn't produce a value in the outer scope.
                 Ok((VirtualRegister(usize::MAX), false)) // Return dummy VR
-            },
-            AstNode::ObjectDefinition { name, base_type: _, fields, is_secret: _, location: _ } => {
+            }
+            AstNode::ObjectDefinition {
+                name: _,
+                base_type: _,
+                fields,
+                is_secret: _,
+                location: _,
+            } => {
                 // Object definitions are type declarations - no bytecode is generated.
                 // The type information is registered in semantic analysis.
                 // At runtime, objects are created via constructor calls (to be implemented).
@@ -852,13 +1327,22 @@ impl CodeGenerator {
 
                 // Object definition doesn't produce a runtime value
                 Ok((VirtualRegister(usize::MAX), false))
-            },
+            }
+            AstNode::TypeAlias { .. }
+            | AstNode::BuiltinTypeDefinition { .. }
+            | AstNode::BuiltinObjectDefinition { .. } => {
+                // These declarations are compile-time metadata only.
+                Ok((VirtualRegister(usize::MAX), false))
+            }
             AstNode::ListLiteral(elements) => {
                 // Create array with capacity
                 let capacity_const = Constant::I64(elements.len() as i64);
                 self.identified_constants.push(capacity_const.clone());
                 let cap_vr = self.allocate_virtual_register(false);
-                self.emit(Instruction::LDI(cap_vr.0, crate::core_types::Value::from(capacity_const)));
+                self.emit(Instruction::LDI(
+                    cap_vr.0,
+                    crate::core_types::Value::from(capacity_const),
+                ));
                 self.emit(Instruction::PUSHARG(cap_vr.0));
                 self.emit(Instruction::CALL("create_array".to_string()));
 
@@ -874,7 +1358,7 @@ impl CodeGenerator {
                 }
 
                 Ok((array_vr, false))
-            },
+            }
             AstNode::DictLiteral(pairs) => {
                 // Create object
                 self.emit(Instruction::CALL("create_object".to_string()));
@@ -894,8 +1378,12 @@ impl CodeGenerator {
                 }
 
                 Ok((obj_vr, false))
-            },
-            AstNode::IndexAccess { base, index, location } => {
+            }
+            AstNode::IndexAccess {
+                base,
+                index,
+                location: _,
+            } => {
                 let (base_vr, base_is_secret) = self.compile_node(base)?;
                 let (index_vr, index_is_secret) = self.compile_node(index)?;
 
@@ -909,25 +1397,31 @@ impl CodeGenerator {
                 self.emit(Instruction::MOV(result_vr.0, 0)); // Result is in r0
 
                 Ok((result_vr, result_is_secret))
-            },
+            }
             // Import statements are processed at the multi-file compilation level
             // and don't generate any bytecode themselves
             AstNode::Import { .. } => {
                 // Imports are a no-op in codegen - they're handled during semantic analysis
                 Ok((VirtualRegister(0), false))
-            },
-            _ => Err(CompilerError::internal_error(format!("Codegen not implemented for AST node: {:?}", node))),
+            }
+            _ => Err(CompilerError::internal_error(format!(
+                "Codegen not implemented for AST node: {:?}",
+                node
+            ))),
         }
     }
 
     /// Finalizes the entire compiled program, including the main chunk and all function chunks.
     fn finalize_program(mut self) -> CompilerResult<CompiledProgram> {
-        // If both an explicit entry main and a legacy def main exist, error clearly.
+        let client_io_manifest = self.client_io_manifest();
+
+        // If both an explicit entry and `def main` exist, error clearly.
         if self.entry_main_chunk.is_some() && self.main_proc_chunk.is_some() {
             return Err(CompilerError::semantic_error(
-                "Both explicit 'main' and legacy 'def main' are defined".to_string(),
+                "Both explicit 'main' and 'def main' entries are defined".to_string(),
                 crate::errors::SourceLocation::default(),
-            ).with_hint("Use only one entry point; prefer 'main <name>(...)'"));
+            )
+            .with_hint("Use only one entry point; prefer 'def main(...)'"));
         }
 
         // If explicit entry is set, ensure no top-level code and use it as entry chunk.
@@ -936,31 +1430,45 @@ impl CodeGenerator {
                 return Err(CompilerError::semantic_error(
                     "Cannot mix top-level code with explicit 'main' entry".to_string(),
                     crate::errors::SourceLocation::default(),
-                ).with_hint("Move top-level code into the entry function declared with 'main'"));
+                )
+                .with_hint("Move top-level code into the entry function declared with 'main'"));
             }
-            return Ok(CompiledProgram { main_chunk: entry_chunk, function_chunks: self.compiled_functions });
+            return Ok(CompiledProgram {
+                main_chunk: entry_chunk,
+                function_chunks: self.compiled_functions,
+                client_io_manifest,
+            });
         }
-        // If a legacy 'def main()' was compiled, prefer it as main only when there are no top-level instructions.
+        // `def main(...)` is an entry chunk and cannot be mixed with top-level code.
         if let Some(main_proc) = self.main_proc_chunk.take() {
             if self.current_instructions.is_empty() {
                 return Ok(CompiledProgram {
                     main_chunk: main_proc,
                     function_chunks: self.compiled_functions,
+                    client_io_manifest,
                 });
             } else {
-                // Preserve the compiled main function as a normal function.
-                self.compiled_functions.insert("main".to_string(), main_proc);
+                return Err(CompilerError::semantic_error(
+                    "Cannot mix top-level code with 'def main' entry".to_string(),
+                    crate::errors::SourceLocation::default(),
+                )
+                .with_hint("Move top-level code into 'def main(...)'"));
             }
         }
 
         // If there are no top-level instructions but a 'main' function exists,
         // insert a call to 'main' so the program entry has executable bytecode.
         if self.current_instructions.is_empty() && self.compiled_functions.contains_key("main") {
-            self.current_instructions.push(Instruction::CALL("main".to_string()));
+            self.current_instructions
+                .push(Instruction::CALL("main".to_string()));
         }
         // Perform register allocation for the main chunk's instructions
         let main_instructions = self.current_instructions; // Instructions generated for the main body
-        let intervals = register_allocator::analyze_liveness_cfg_with_liveins(&main_instructions, &self.current_labels, &[]);
+        let intervals = register_allocator::analyze_liveness_cfg_with_liveins(
+            &main_instructions,
+            &self.current_labels,
+            &[],
+        );
         let graph = register_allocator::build_interference_graph(&intervals);
 
         let k_clear = SECRET_REGISTER_START;
@@ -968,7 +1476,8 @@ impl CodeGenerator {
         let secrecy_map = self.vr_secrecy;
         // No precolored mapping for top-level/main chunk
         let empty_pre: HashMap<VirtualRegister, PhysicalRegister> = HashMap::new();
-        let allocation_result = register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map, &empty_pre);
+        let allocation_result =
+            register_allocator::color_graph(&graph, k_clear, k_secret, &secrecy_map, &empty_pre);
         let allocation = match allocation_result {
             Ok(alloc) => alloc,
             Err(AllocationError::NeedsSpilling(spilled_vrs)) => {
@@ -978,10 +1487,15 @@ impl CodeGenerator {
                     spilled_vrs
                 )).with_hint("Spilling not yet implemented."));
             }
-            Err(AllocationError::PoolExhausted(_, _)) => return Err(CompilerError::internal_error("Register allocation failed: Pool exhausted".to_string())),
+            Err(AllocationError::PoolExhausted(_, _)) => {
+                return Err(CompilerError::internal_error(
+                    "Register allocation failed: Pool exhausted".to_string(),
+                ))
+            }
         };
 
-        let final_main_instructions = register_allocator::rewrite_instructions(&main_instructions, &allocation);
+        let final_main_instructions =
+            register_allocator::rewrite_instructions(&main_instructions, &allocation);
         let mut main_chunk = BytecodeChunk::new();
         main_chunk.instructions = final_main_instructions;
         main_chunk.labels = self.current_labels; // TODO: Adjust label indices?
@@ -990,6 +1504,7 @@ impl CodeGenerator {
         Ok(CompiledProgram {
             main_chunk,
             function_chunks: self.compiled_functions,
+            client_io_manifest,
         })
     }
 }
@@ -1000,8 +1515,8 @@ impl CodeGenerator {
 /// This function is called when the "builtin" pragma is encountered during code generation.
 fn handle_builtin_pragma(
     _generator: &mut CodeGenerator, // We need this to register the name
-    _func_def_node: &AstNode,      // The FunctionDefinition node
-    _pragma: &Pragma,              // The specific pragma node
+    _func_def_node: &AstNode,       // The FunctionDefinition node
+    _pragma: &Pragma,               // The specific pragma node
 ) -> CompilerResult<()> {
     // The core logic for 'builtin' is simply *not* compiling the body.
     Ok(())
@@ -1020,6 +1535,112 @@ fn dedupe_constants(constants: Vec<Constant>) -> Vec<Constant> {
     out
 }
 
+fn collect_upvalue_names(node: &AstNode) -> Vec<String> {
+    fn visit(node: &AstNode, out: &mut Vec<String>) {
+        match node {
+            AstNode::FunctionCall {
+                function,
+                arguments,
+                ..
+            } => {
+                if let AstNode::Identifier(name, _) = function.as_ref() {
+                    if matches!(name.as_str(), "get_upvalue" | "set_upvalue") {
+                        if let Some(AstNode::Literal(crate::ast::Value::String(upvalue))) =
+                            arguments.first()
+                        {
+                            if !out.contains(upvalue) {
+                                out.push(upvalue.clone());
+                            }
+                        }
+                    }
+                }
+
+                visit(function, out);
+                for argument in arguments {
+                    visit(argument, out);
+                }
+            }
+            AstNode::Block(statements) => {
+                for statement in statements {
+                    visit(statement, out);
+                }
+            }
+            AstNode::VariableDeclaration {
+                value: Some(value), ..
+            } => visit(value, out),
+            AstNode::VariableDeclaration { value: None, .. } => {}
+            AstNode::Assignment { target, value, .. } => {
+                visit(target, out);
+                visit(value, out);
+            }
+            AstNode::Return {
+                value: Some(value), ..
+            } => visit(value, out),
+            AstNode::Return { value: None, .. } => {}
+            AstNode::DiscardStatement { expression, .. } => visit(expression, out),
+            AstNode::IfExpression {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit(condition, out);
+                visit(then_branch, out);
+                if let Some(else_branch) = else_branch {
+                    visit(else_branch, out);
+                }
+            }
+            AstNode::WhileLoop {
+                condition, body, ..
+            } => {
+                visit(condition, out);
+                visit(body, out);
+            }
+            AstNode::ForLoop { iterable, body, .. } => {
+                visit(iterable, out);
+                visit(body, out);
+            }
+            AstNode::BinaryOperation { left, right, .. } => {
+                visit(left, out);
+                visit(right, out);
+            }
+            AstNode::UnaryOperation { operand, .. } => visit(operand, out),
+            AstNode::NamedArgument { value, .. } => visit(value, out),
+            AstNode::FieldAccess { object, .. } => visit(object, out),
+            AstNode::IndexAccess { base, index, .. } => {
+                visit(base, out);
+                visit(index, out);
+            }
+            AstNode::ListLiteral(elements)
+            | AstNode::TupleLiteral(elements)
+            | AstNode::SetLiteral(elements) => {
+                for element in elements {
+                    visit(element, out);
+                }
+            }
+            AstNode::DictLiteral(pairs) => {
+                for (key, value) in pairs {
+                    visit(key, out);
+                    visit(value, out);
+                }
+            }
+            AstNode::CommandCall {
+                command, arguments, ..
+            } => {
+                visit(command, out);
+                for argument in arguments {
+                    visit(argument, out);
+                }
+            }
+            AstNode::FunctionDefinition { .. } => {}
+            _ => {}
+        }
+    }
+
+    let mut upvalues = Vec::new();
+    visit(node, &mut upvalues);
+    upvalues
+}
+
 pub fn generate_bytecode(node: &AstNode) -> CompilerResult<CompiledProgram> {
     let mut generator = CodeGenerator::new();
     let (_result_vr, _result_is_secret) = generator.compile_node(node)?;
@@ -1035,12 +1656,12 @@ mod tests {
         let input = vec![
             Constant::I64(1),
             Constant::Bool(true),
-            Constant::I64(1),           // dup
+            Constant::I64(1), // dup
             Constant::String("a".into()),
             Constant::String("a".into()), // dup
             Constant::Unit,
-            Constant::Unit,               // dup
-            Constant::Bool(true),         // dup
+            Constant::Unit,       // dup
+            Constant::Bool(true), // dup
             Constant::I64(2),
         ];
 

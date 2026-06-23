@@ -2,9 +2,10 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
+use crate::bytecode::{BytecodeChunk, CompiledProgram, Constant};
 use crate::compiler::{compile, CompilerOptions};
-use crate::bytecode::{CompiledProgram, BytecodeChunk, Constant};
 use crate::errors::CompilerError;
+use stoffel_vm_types::compiled_binary::MpcBackend;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -20,6 +21,7 @@ impl From<CCompilerOptions> for CompilerOptions {
             optimize: c_options.optimize != 0,
             optimization_level: c_options.optimization_level,
             print_ir: c_options.print_ir != 0,
+            mpc_backend: MpcBackend::default(),
         }
     }
 }
@@ -138,7 +140,7 @@ unsafe fn rust_errors_to_c(errors: Vec<CompilerError>) -> CCompilerErrors {
                 crate::errors::ErrorCategory::Semantic => 2,
                 crate::errors::ErrorCategory::Internal => 3,
             },
-            code: string_to_c_char(&error.code),
+            code: string_to_c_char(error.code),
             hint: if let Some(hint) = &error.hint {
                 string_to_c_char(hint)
             } else {
@@ -162,100 +164,161 @@ unsafe fn constant_to_c(constant: &Constant) -> CConstant {
         Constant::I64(val) => {
             let mut data = CConstantData { i64_val: 0 };
             data.i64_val = *val;
-            CConstant { const_type: 0, data }
-        },
+            CConstant {
+                const_type: 0,
+                data,
+            }
+        }
         Constant::I32(val) => {
             let mut data = CConstantData { i32_val: 0 };
             data.i32_val = *val;
-            CConstant { const_type: 1, data }
-        },
+            CConstant {
+                const_type: 1,
+                data,
+            }
+        }
         Constant::I16(val) => {
             let mut data = CConstantData { i16_val: 0 };
             data.i16_val = *val;
-            CConstant { const_type: 2, data }
-        },
+            CConstant {
+                const_type: 2,
+                data,
+            }
+        }
         Constant::I8(val) => {
             let mut data = CConstantData { i8_val: 0 };
             data.i8_val = *val;
-            CConstant { const_type: 3, data }
-        },
+            CConstant {
+                const_type: 3,
+                data,
+            }
+        }
         Constant::U8(val) => {
             let mut data = CConstantData { u8_val: 0 };
             data.u8_val = *val;
-            CConstant { const_type: 4, data }
-        },
+            CConstant {
+                const_type: 4,
+                data,
+            }
+        }
         Constant::U16(val) => {
             let mut data = CConstantData { u16_val: 0 };
             data.u16_val = *val;
-            CConstant { const_type: 5, data }
-        },
+            CConstant {
+                const_type: 5,
+                data,
+            }
+        }
         Constant::U32(val) => {
             let mut data = CConstantData { u32_val: 0 };
             data.u32_val = *val;
-            CConstant { const_type: 6, data }
-        },
+            CConstant {
+                const_type: 6,
+                data,
+            }
+        }
         Constant::U64(val) => {
             let mut data = CConstantData { u64_val: 0 };
             data.u64_val = *val;
-            CConstant { const_type: 7, data }
-        },
+            CConstant {
+                const_type: 7,
+                data,
+            }
+        }
         Constant::Float(val) => {
             let mut data = CConstantData { float_val: 0 };
             data.float_val = f64::from(*val).to_bits() as i64;
-            CConstant { const_type: 8, data }
-        },
+            CConstant {
+                const_type: 8,
+                data,
+            }
+        }
         Constant::Bool(val) => {
             let mut data = CConstantData { bool_val: 0 };
             data.bool_val = if *val { 1 } else { 0 };
-            CConstant { const_type: 9, data }
-        },
+            CConstant {
+                const_type: 9,
+                data,
+            }
+        }
         Constant::String(val) => {
-            let mut data = CConstantData { string_val: ptr::null_mut() };
+            let mut data = CConstantData {
+                string_val: ptr::null_mut(),
+            };
             data.string_val = string_to_c_char(val);
-            CConstant { const_type: 10, data }
-        },
+            CConstant {
+                const_type: 10,
+                data,
+            }
+        }
         Constant::Object(val) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = *val;
-            CConstant { const_type: 11, data }
-        },
+            CConstant {
+                const_type: 11,
+                data,
+            }
+        }
         Constant::Array(val) => {
             let mut data = CConstantData { array_val: 0 };
             data.array_val = *val;
-            CConstant { const_type: 12, data }
-        },
+            CConstant {
+                const_type: 12,
+                data,
+            }
+        }
         Constant::Foreign(val) => {
             let mut data = CConstantData { foreign_val: 0 };
             data.foreign_val = *val;
-            CConstant { const_type: 13, data }
-        },
+            CConstant {
+                const_type: 13,
+                data,
+            }
+        }
         Constant::Closure(_, _) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = 0;
-            CConstant { const_type: 14, data }
-        },
+            CConstant {
+                const_type: 14,
+                data,
+            }
+        }
         Constant::Unit => {
             let mut data = CConstantData { u8_val: 0 };
             data.u8_val = 0;
-            CConstant { const_type: 15, data }
-        },
+            CConstant {
+                const_type: 15,
+                data,
+            }
+        }
         Constant::Share(_, _) => {
             let mut data = CConstantData { object_val: 0 };
             data.object_val = 0;
-            CConstant { const_type: 16, data }
-        },
+            CConstant {
+                const_type: 16,
+                data,
+            }
+        }
     }
 }
 
-unsafe fn instruction_to_c(instruction: &stoffel_vm_types::instructions::Instruction) -> CInstruction {
+unsafe fn instruction_to_c(
+    instruction: &stoffel_vm_types::instructions::Instruction,
+) -> CInstruction {
     match instruction {
+        stoffel_vm_types::instructions::Instruction::NOP => CInstruction {
+            opcode: stoffel_vm_types::instructions::ReducedOpcode::NOP as u8,
+            operand1: 0,
+            operand2: 0,
+            operand3: 0,
+        },
         stoffel_vm_types::instructions::Instruction::LD(reg, offset) => CInstruction {
             opcode: 0,
             operand1: *reg,
             operand2: *offset as usize,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::LDI(reg, value) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::LDI(reg, _value) => CInstruction {
             opcode: 1,
             operand1: *reg,
             operand2: 0,
@@ -333,37 +396,37 @@ unsafe fn instruction_to_c(instruction: &stoffel_vm_types::instructions::Instruc
             operand2: *src,
             operand3: *amount,
         },
-        stoffel_vm_types::instructions::Instruction::JMP(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMP(_label) => CInstruction {
             opcode: 14,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPEQ(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPEQ(_label) => CInstruction {
             opcode: 15,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPNEQ(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPNEQ(_label) => CInstruction {
             opcode: 16,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPLT(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPLT(_label) => CInstruction {
             opcode: 17,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::JMPGT(label) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::JMPGT(_label) => CInstruction {
             opcode: 18,
             operand1: 0,
             operand2: 0,
             operand3: 0,
         },
-        stoffel_vm_types::instructions::Instruction::CALL(function) => CInstruction {
+        stoffel_vm_types::instructions::Instruction::CALL(_function) => CInstruction {
             opcode: 19,
             operand1: 0,
             operand2: 0,
@@ -446,6 +509,13 @@ unsafe fn compiled_program_to_c(program: CompiledProgram) -> *mut CCompiledProgr
 }
 
 #[no_mangle]
+/// Compile Stoffel source code through the C ABI.
+///
+/// # Safety
+///
+/// `source` and `filename` must be valid, null-terminated C strings. `options` may be null or
+/// point to a valid `CCompilerOptions`. The returned pointer must be released with
+/// `stoffel_free_compilation_result`.
 pub unsafe extern "C" fn stoffel_compile(
     source: *const c_char,
     filename: *const c_char,
@@ -493,6 +563,12 @@ pub unsafe extern "C" fn stoffel_compile(
 }
 
 #[no_mangle]
+/// Free a compilation result returned by `stoffel_compile`.
+///
+/// # Safety
+///
+/// `result` must be null or a pointer returned by `stoffel_compile` that has not already been
+/// freed.
 pub unsafe extern "C" fn stoffel_free_compilation_result(result: *mut CCompilationResult) {
     if result.is_null() {
         return;
@@ -508,6 +584,11 @@ pub unsafe extern "C" fn stoffel_free_compilation_result(result: *mut CCompilati
 }
 
 #[no_mangle]
+/// Free a compiled program allocated by this library.
+///
+/// # Safety
+///
+/// `program` must be null or a pointer allocated by this library that has not already been freed.
 pub unsafe extern "C" fn stoffel_free_compiled_program(program: *mut CCompiledProgram) {
     if program.is_null() {
         return;
@@ -534,6 +615,11 @@ pub unsafe extern "C" fn stoffel_free_compiled_program(program: *mut CCompiledPr
 }
 
 #[no_mangle]
+/// Free a bytecode chunk allocated by this library.
+///
+/// # Safety
+///
+/// `chunk` must be null or point to a `CBytecodeChunk` allocated by this library.
 pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChunk) {
     if chunk.is_null() {
         return;
@@ -550,11 +636,8 @@ pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChun
     }
 
     if !chunk.constants.is_null() {
-        let constants = Vec::from_raw_parts(
-            chunk.constants,
-            chunk.constant_count,
-            chunk.constant_count,
-        );
+        let constants =
+            Vec::from_raw_parts(chunk.constants, chunk.constant_count, chunk.constant_count);
 
         for constant in constants {
             if constant.const_type == 10 && !constant.data.string_val.is_null() {
@@ -565,6 +648,11 @@ pub unsafe extern "C" fn stoffel_free_bytecode_chunk(chunk: *const CBytecodeChun
 }
 
 #[no_mangle]
+/// Free compiler errors allocated by this library.
+///
+/// # Safety
+///
+/// `errors` must be null or point to a `CCompilerErrors` value allocated by this library.
 pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerErrors) {
     if errors.is_null() {
         return;
@@ -573,11 +661,7 @@ pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerEr
     let errors = &*errors;
 
     if !errors.errors.is_null() {
-        let error_vec = Vec::from_raw_parts(
-            errors.errors,
-            errors.count,
-            errors.count,
-        );
+        let error_vec = Vec::from_raw_parts(errors.errors, errors.count, errors.count);
 
         for error in error_vec {
             if !error.message.is_null() {
@@ -597,6 +681,11 @@ pub unsafe extern "C" fn stoffel_free_compiler_errors(errors: *const CCompilerEr
 }
 
 #[no_mangle]
+/// Return the compiler version as a static C string.
+///
+/// # Safety
+///
+/// The returned pointer is static and must not be freed.
 pub unsafe extern "C" fn stoffel_get_version() -> *const c_char {
-    "0.1.0\0".as_ptr() as *const c_char
+    c"0.1.0".as_ptr()
 }

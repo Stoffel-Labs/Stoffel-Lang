@@ -15,7 +15,9 @@ use crate::bytecode::CompiledProgram;
 use crate::codegen;
 use crate::compiler::CompilerOptions;
 use crate::errors::{CompilerError, ErrorReporter, SourceLocation};
-use crate::module_resolver::{ImportInfo, ModulePath, ModuleResolver, ResolvedModule};
+use crate::module_resolver::{
+    is_std_module_path, ImportInfo, ModulePath, ModuleResolver, ResolvedModule,
+};
 use crate::optimizations;
 use crate::semantic;
 use crate::symbol_table::{SymbolInfo, SymbolKind, SymbolType};
@@ -56,8 +58,6 @@ pub struct MultiFileCompiler {
     options: CompilerOptions,
     /// Compiled modules indexed by module path string
     compiled_modules: HashMap<String, CompiledModule>,
-    /// All errors encountered
-    errors: Vec<CompilerError>,
 }
 
 impl MultiFileCompiler {
@@ -66,19 +66,20 @@ impl MultiFileCompiler {
             resolver: ModuleResolver::new(),
             options,
             compiled_modules: HashMap::new(),
-            errors: Vec::new(),
         }
     }
 
     /// Compiles a project starting from an entry file.
     /// Returns a combined CompiledProgram containing all modules.
-    pub fn compile_project(&mut self, entry_file: &Path) -> Result<CompiledProgram, Vec<CompilerError>> {
+    pub fn compile_project(
+        &mut self,
+        entry_file: &Path,
+    ) -> Result<CompiledProgram, Vec<CompilerError>> {
         // Phase 1: Resolve all modules and build dependency graph
         let entry_module = self.resolver.resolve_all(entry_file)?;
 
         // Phase 2: Get compilation order (dependencies first)
-        let compilation_order = self.resolver.get_compilation_order()
-            .map_err(|e| vec![e])?;
+        let compilation_order = self.resolver.get_compilation_order().map_err(|e| vec![e])?;
 
         // Phase 3: Compile each module in order
         for module_key in &compilation_order {
@@ -91,73 +92,94 @@ impl MultiFileCompiler {
 
     /// Compiles a single module, using exports from already-compiled dependencies.
     fn compile_module(&mut self, module_key: &str) -> Result<(), Vec<CompilerError>> {
-        let resolved = self.resolver.resolved_modules.get(module_key)
-            .ok_or_else(|| vec![CompilerError::syntax_error(
-                format!("Internal error: module '{}' not found in resolver", module_key),
-                SourceLocation::default(),
-            )])?;
+        let resolved = self
+            .resolver
+            .resolved_modules
+            .get(module_key)
+            .ok_or_else(|| {
+                vec![CompilerError::syntax_error(
+                    format!(
+                        "Internal error: module '{}' not found in resolver",
+                        module_key
+                    ),
+                    SourceLocation::default(),
+                )]
+            })?;
 
         // Collect imports for this module
         let imported_symbols = self.collect_imported_symbols(&resolved.imports)?;
 
         // Compile the module with imported symbols
-        let (program, exports) = self.compile_single_module(
-            resolved,
-            &imported_symbols,
-        )?;
+        let (program, exports) = self.compile_single_module(resolved, &imported_symbols)?;
 
         // Store the compiled module
-        self.compiled_modules.insert(module_key.to_string(), CompiledModule {
-            module_path: resolved.module_path.clone(),
-            program,
-            exports,
-        });
+        self.compiled_modules.insert(
+            module_key.to_string(),
+            CompiledModule {
+                module_path: resolved.module_path.clone(),
+                program,
+                exports,
+            },
+        );
 
         Ok(())
     }
 
     /// Collects all symbols that should be available from imports.
-    fn collect_imported_symbols(&self, imports: &[ImportInfo]) -> Result<HashMap<String, SymbolInfo>, Vec<CompilerError>> {
+    fn collect_imported_symbols(
+        &self,
+        imports: &[ImportInfo],
+    ) -> Result<HashMap<String, SymbolInfo>, Vec<CompilerError>> {
         let mut symbols = HashMap::new();
 
         for import in imports {
+            if is_std_module_path(&import.module_path) {
+                continue;
+            }
+
             let module_key = import.module_path.as_string();
 
-            let compiled = self.compiled_modules.get(&module_key)
-                .ok_or_else(|| vec![CompilerError::syntax_error(
+            let compiled = self.compiled_modules.get(&module_key).ok_or_else(|| {
+                vec![CompilerError::syntax_error(
                     format!("Module '{}' not yet compiled (internal error)", module_key),
                     import.location.clone(),
-                )])?;
+                )]
+            })?;
 
             // Determine the prefix for imported symbols
-            let prefix = import.alias.as_ref()
-                .unwrap_or(&module_key);
+            let prefix = import.alias.as_ref().unwrap_or(&module_key);
 
             // Add function exports
             for (name, (params, ret_type)) in &compiled.exports.functions {
                 let qualified_name = format!("{}.{}", prefix, name);
-                symbols.insert(qualified_name.clone(), SymbolInfo {
-                    name: qualified_name,
-                    kind: SymbolKind::Function {
-                        parameters: params.clone(),
-                        return_type: ret_type.clone(),
+                symbols.insert(
+                    qualified_name.clone(),
+                    SymbolInfo {
+                        name: qualified_name,
+                        kind: SymbolKind::Function {
+                            parameters: params.clone(),
+                            return_type: ret_type.clone(),
+                        },
+                        symbol_type: ret_type.clone(),
+                        is_secret: ret_type.is_secret(),
+                        defined_at: import.location.clone(),
                     },
-                    symbol_type: ret_type.clone(),
-                    is_secret: ret_type.is_secret(),
-                    defined_at: import.location.clone(),
-                });
+                );
             }
 
             // Add variable exports
             for (name, var_type) in &compiled.exports.variables {
                 let qualified_name = format!("{}.{}", prefix, name);
-                symbols.insert(qualified_name.clone(), SymbolInfo {
-                    name: qualified_name,
-                    kind: SymbolKind::Variable { is_mutable: false },
-                    symbol_type: var_type.clone(),
-                    is_secret: var_type.is_secret(),
-                    defined_at: import.location.clone(),
-                });
+                symbols.insert(
+                    qualified_name.clone(),
+                    SymbolInfo {
+                        name: qualified_name,
+                        kind: SymbolKind::Variable { is_mutable: false },
+                        symbol_type: var_type.clone(),
+                        is_secret: var_type.is_secret(),
+                        defined_at: import.location.clone(),
+                    },
+                );
             }
         }
 
@@ -201,8 +223,8 @@ impl MultiFileCompiler {
         let exports = self.extract_exports(&optimized_ast, &resolved.module_path);
 
         // Code generation
-        let program = codegen::generate_bytecode(&optimized_ast)
-            .map_err(|e| vec![e])?;
+        let mut program = codegen::generate_bytecode(&optimized_ast).map_err(|e| vec![e])?;
+        program.client_io_manifest.mpc_backend = self.options.mpc_backend;
 
         Ok((program, exports))
     }
@@ -234,25 +256,42 @@ impl MultiFileCompiler {
                     self.extract_exports_recursive(stmt, exports);
                 }
             }
-            AstNode::FunctionDefinition { name: Some(name), parameters, return_type, .. } => {
+            AstNode::FunctionDefinition {
+                name: Some(name),
+                type_params,
+                parameters,
+                return_type,
+                ..
+            } => {
                 // All top-level functions are exported
-                let param_types: Vec<SymbolType> = parameters.iter()
+                let param_types: Vec<SymbolType> = parameters
+                    .iter()
                     .map(|p| {
-                        p.type_annotation.as_ref()
-                            .map(|t| SymbolType::from_ast(t))
+                        p.type_annotation
+                            .as_ref()
+                            .map(|t| SymbolType::from_ast_with_type_params(t, type_params))
                             .unwrap_or(SymbolType::Unknown)
                     })
                     .collect();
 
-                let ret_type = return_type.as_ref()
-                    .map(|t| SymbolType::from_ast(t))
+                let ret_type = return_type
+                    .as_ref()
+                    .map(|t| SymbolType::from_ast_with_type_params(t, type_params))
                     .unwrap_or(SymbolType::Void);
 
-                exports.functions.insert(name.clone(), (param_types, ret_type));
+                exports
+                    .functions
+                    .insert(name.clone(), (param_types, ret_type));
             }
-            AstNode::VariableDeclaration { name, type_annotation, is_secret, .. } => {
+            AstNode::VariableDeclaration {
+                name,
+                type_annotation,
+                is_secret,
+                ..
+            } => {
                 // Export top-level variables
-                let var_type = type_annotation.as_ref()
+                let var_type = type_annotation
+                    .as_ref()
                     .map(|t| SymbolType::from_ast(t))
                     .unwrap_or(SymbolType::Unknown);
 
@@ -271,11 +310,12 @@ impl MultiFileCompiler {
     /// Links all compiled modules into a single program.
     fn link_modules(&self, entry_module: &str) -> Result<CompiledProgram, Vec<CompilerError>> {
         // Get the entry module's compiled program
-        let entry = self.compiled_modules.get(entry_module)
-            .ok_or_else(|| vec![CompilerError::syntax_error(
+        let entry = self.compiled_modules.get(entry_module).ok_or_else(|| {
+            vec![CompilerError::syntax_error(
                 format!("Entry module '{}' not found", entry_module),
                 SourceLocation::default(),
-            )])?;
+            )]
+        })?;
 
         // Start with the entry module's program
         let mut linked = entry.program.clone();
@@ -293,7 +333,9 @@ impl MultiFileCompiler {
                     // Insert an unqualified alias only if it does not already exist.
                     // This preserves entry-module definitions and avoids silent overwrites.
                     if !linked.function_chunks.contains_key(func_name) {
-                        linked.function_chunks.insert(func_name.clone(), chunk.clone());
+                        linked
+                            .function_chunks
+                            .insert(func_name.clone(), chunk.clone());
                     }
                 }
             }
@@ -330,7 +372,9 @@ mod tests {
 
     #[test]
     fn test_has_imports_basic() {
-        assert!(has_imports("import utils.math\nmain main() -> int64:\n  return 0"));
+        assert!(has_imports(
+            "import utils.math\ndef main() -> int64:\n  return 0"
+        ));
     }
 
     #[test]
@@ -340,13 +384,15 @@ mod tests {
 
     #[test]
     fn test_has_imports_no_imports() {
-        assert!(!has_imports("main main() -> int64:\n  return 0"));
+        assert!(!has_imports("def main() -> int64:\n  return 0"));
     }
 
     #[test]
     fn test_has_imports_comment_not_counted() {
         // Comments starting with # are not imports
-        assert!(!has_imports("# import is a keyword\nmain main() -> int64:\n  return 0"));
+        assert!(!has_imports(
+            "# import is a keyword\ndef main() -> int64:\n  return 0"
+        ));
     }
 
     #[test]
@@ -356,7 +402,7 @@ import utils.math
 import utils.strings
 import helpers
 
-main main() -> int64:
+def main() -> int64:
   return 0
 "#;
         assert!(has_imports(source));
@@ -364,7 +410,9 @@ main main() -> int64:
 
     #[test]
     fn test_has_imports_import_with_alias() {
-        assert!(has_imports("import utils.math as m\nmain main() -> int64:\n  return 0"));
+        assert!(has_imports(
+            "import utils.math as m\ndef main() -> int64:\n  return 0"
+        ));
     }
 
     #[test]
@@ -374,7 +422,7 @@ main main() -> int64:
 
 import utils.math
 
-main main() -> int64:
+def main() -> int64:
   return 0
 "#;
         assert!(has_imports(source));
@@ -395,7 +443,9 @@ main main() -> int64:
         // "import" inside a string literal shouldn't trigger detection
         // Note: This is a limitation - the current implementation might give false positives
         // if "import " appears at the start of a line inside a multi-line string
-        assert!(!has_imports("var s = \"import something\"\nmain main() -> int64:\n  return 0"));
+        assert!(!has_imports(
+            "var s = \"import something\"\ndef main() -> int64:\n  return 0"
+        ));
     }
 
     // ==================== ModuleExports Tests ====================
@@ -416,6 +466,5 @@ main main() -> int64:
         let options = CompilerOptions::default();
         let compiler = MultiFileCompiler::new(options);
         assert!(compiler.compiled_modules.is_empty());
-        assert!(compiler.errors.is_empty());
     }
 }

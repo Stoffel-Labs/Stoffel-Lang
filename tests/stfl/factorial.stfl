@@ -1,7 +1,7 @@
 # Factorial sample that computes factorial(5) = 120
 # Uses an inclusive range 1..n and multiplies into an accumulator.
 
-main main() -> nil:
+def main() -> None:
   var n = 5
   var acc = 1
 

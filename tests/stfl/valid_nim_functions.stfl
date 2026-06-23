@@ -2,10 +2,10 @@
 def add(a: int64, b: int64) -> int64:
   return a + b
 
-def print(msg: string) -> nil {.builtin.}:
+def print(msg: string) -> None {.builtin.}:
 
-# Function with no parameters and no return value (implicit nil)
-def greet() -> nil:
+# Function with no parameters and no return value (implicit None)
+def greet() -> None:
   print("Hello!") # Assuming print exists
 
 # Function with no parameters but explicit return type
@@ -13,12 +13,12 @@ def get_pi() -> float:
   return 3.14159
 
 # Function with parameters but no explicit return type
-def log_message(msg: string) -> nil:
+def log_message(msg: string) -> None:
   # Assume some logging mechanism
   discard msg # Use discard if value isn't used
 
-# Secret function definition
-secret def calculate_secret(input: int64) -> int64:
+# Function with a secret return type
+def calculate_secret(input: int64) -> secret int64:
   var intermediate = input * 2 + 7
   return intermediate # Implementation is hidden
 
@@ -38,8 +38,8 @@ def transform_secret(key: secret string) -> secret string:
   # Process the secret key, return a derived secret
   return key # Simplified
 
-# Secret function with secret parameter and return type
-secret def super_secret_op(val: secret int64) -> secret int64:
+# Function with secret parameter and return type
+def super_secret_op(val: secret int64) -> secret int64:
   return val + 1 # Simplified
 
 # Function definition spanning multiple lines (body indentation)

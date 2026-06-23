@@ -19,7 +19,7 @@ def select(condition: int64, a: secret int64, b: secret int64) -> secret int64:
 # thresholds: list of public capacity thresholds for each item
 # n: number of items
 # Returns total weight of selected items
-def greedy_knapsack(weights: List[secret int64], thresholds: List[int64], n: int64) -> secret int64:
+def greedy_knapsack(weights: list[secret int64], thresholds: list[int64], n: int64) -> secret int64:
   var total: secret int64 = 0
   var remaining: int64 = thresholds[0]
   var i: int64 = 0
@@ -44,24 +44,22 @@ def greedy_knapsack(weights: List[secret int64], thresholds: List[int64], n: int
 
   return total
 
-main main() -> nil:
-  # Build weights list using create_array() and array_push()
-  # Note: empty list literal [] is not supported
-  var weights: List[secret int64] = create_array()
-  array_push(weights, 1000)
-  array_push(weights, 800)
-  array_push(weights, 500)
-  array_push(weights, 300)
-  array_push(weights, 100)
+def main() -> None:
+  var weights: list[secret int64] = []
+  weights.append(1000)
+  weights.append(800)
+  weights.append(500)
+  weights.append(300)
+  weights.append(100)
 
   # Public capacity thresholds for decision making
   # These represent the remaining capacity needed to include each item
-  var thresholds: List[int64] = create_array()
-  array_push(thresholds, 2000)
-  array_push(thresholds, 1000)
-  array_push(thresholds, 200)
-  array_push(thresholds, 0)
-  array_push(thresholds, 0)
+  var thresholds: list[int64] = []
+  thresholds.append(2000)
+  thresholds.append(1000)
+  thresholds.append(200)
+  thresholds.append(0)
+  thresholds.append(0)
 
   var n: int64 = 5
   var result: secret int64 = greedy_knapsack(weights, thresholds, n)

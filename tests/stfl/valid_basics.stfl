@@ -4,9 +4,9 @@
 var an_int = 42
 var a_float = 123.456 # Fixed point representation
 var a_string = "Hello, Stoffel!"
-var is_true = true
-var is_false = false
-var nothing = nil
+var is_true = True
+var is_false = False
+var nothing = None
 
 # Variable Declarations
 var immutable_val = 100 # Inferred type

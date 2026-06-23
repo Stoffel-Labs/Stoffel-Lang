@@ -57,7 +57,11 @@ fn collect_referenced_vars(node: &AstNode, vars: &mut HashSet<String>) {
         AstNode::UnaryOperation { operand, .. } => {
             collect_referenced_vars(operand, vars);
         }
-        AstNode::FunctionCall { function, arguments, .. } => {
+        AstNode::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
             collect_referenced_vars(function, vars);
             for arg in arguments {
                 collect_referenced_vars(arg, vars);
@@ -75,7 +79,11 @@ fn collect_referenced_vars(node: &AstNode, vars: &mut HashSet<String>) {
                 collect_referenced_vars(elem, vars);
             }
         }
-        AstNode::IfExpression { condition, then_branch, else_branch } => {
+        AstNode::IfExpression {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_referenced_vars(condition, vars);
             collect_referenced_vars(then_branch, vars);
             if let Some(else_b) = else_branch {
@@ -86,11 +94,16 @@ fn collect_referenced_vars(node: &AstNode, vars: &mut HashSet<String>) {
     }
 }
 
-/// Checks if an AST node is a Share.open() function call
+/// Checks if an AST node is a Share.open() receiver method call.
 fn is_share_open_call(node: &AstNode) -> Option<&AstNode> {
-    if let AstNode::FunctionCall { function, arguments, .. } = node {
+    if let AstNode::FunctionCall {
+        function,
+        arguments,
+        ..
+    } = node
+    {
         if let AstNode::Identifier(name, _) = function.as_ref() {
-            if name == "Share.open" && arguments.len() == 1 {
+            if (name == "Share.open" || name == "open") && arguments.len() == 1 {
                 return Some(&arguments[0]);
             }
         }
@@ -105,7 +118,14 @@ fn extract_reveal_candidates(statements: &[AstNode]) -> Vec<RevealCandidate> {
     for (idx, stmt) in statements.iter().enumerate() {
         match stmt {
             // Pattern: let x = Share.open(share_expr)
-            AstNode::VariableDeclaration { name, value: Some(value), type_annotation, is_mutable, location, .. } => {
+            AstNode::VariableDeclaration {
+                name,
+                value: Some(value),
+                type_annotation,
+                is_mutable,
+                location,
+                ..
+            } => {
                 if let Some(share_expr) = is_share_open_call(value) {
                     let mut referenced_vars = HashSet::new();
                     collect_referenced_vars(share_expr, &mut referenced_vars);
@@ -124,7 +144,11 @@ fn extract_reveal_candidates(statements: &[AstNode]) -> Vec<RevealCandidate> {
                 }
             }
             // Pattern: x = Share.open(share_expr)
-            AstNode::Assignment { target, value, location } => {
+            AstNode::Assignment {
+                target,
+                value,
+                location,
+            } => {
                 if let AstNode::Identifier(name, _) = target.as_ref() {
                     if let Some(share_expr) = is_share_open_call(value) {
                         let mut referenced_vars = HashSet::new();
@@ -145,7 +169,10 @@ fn extract_reveal_candidates(statements: &[AstNode]) -> Vec<RevealCandidate> {
                 }
             }
             // Pattern: _ = Share.open(share_expr) (discard statement)
-            AstNode::DiscardStatement { expression, location } => {
+            AstNode::DiscardStatement {
+                expression,
+                location,
+            } => {
                 if let Some(share_expr) = is_share_open_call(expression) {
                     let mut referenced_vars = HashSet::new();
                     collect_referenced_vars(share_expr, &mut referenced_vars);
@@ -191,7 +218,9 @@ fn group_batchable_reveals(candidates: Vec<RevealCandidate>) -> Vec<Vec<RevealCa
                 // Check if consecutive
                 let is_consecutive = candidate.statement_index == last_idx + 1;
                 // Check if there's no dependency on previously defined vars
-                let has_dependency = candidate.referenced_vars.iter()
+                let has_dependency = candidate
+                    .referenced_vars
+                    .iter()
                     .any(|var| defined_vars.contains(var));
 
                 is_consecutive && !has_dependency
@@ -245,13 +274,14 @@ fn create_batch_reveal_statements(group: &[RevealCandidate]) -> Vec<AstNode> {
     let location = group[0].location.clone();
 
     // Create the list of share expressions: [s1, s2, s3, ...]
-    let share_list = AstNode::ListLiteral(
-        group.iter().map(|c| c.share_expr.clone()).collect()
-    );
+    let share_list = AstNode::ListLiteral(group.iter().map(|c| c.share_expr.clone()).collect());
 
     // Create: let __batch_reveal_N = Share.batch_open([s1, s2, ...])
     let batch_call = AstNode::FunctionCall {
-        function: Box::new(AstNode::Identifier("Share.batch_open".to_string(), location.clone())),
+        function: Box::new(AstNode::Identifier(
+            "Share.batch_open".to_string(),
+            location.clone(),
+        )),
         arguments: vec![share_list],
         location: location.clone(),
         resolved_return_type: None, // Will be resolved by semantic analysis
@@ -274,7 +304,7 @@ fn create_batch_reveal_statements(group: &[RevealCandidate]) -> Vec<AstNode> {
             base: Box::new(AstNode::Identifier(temp_name.clone(), location.clone())),
             index: Box::new(AstNode::Literal(crate::ast::Value::Int {
                 value: idx as u128,
-                kind: None
+                kind: None,
             })),
             location: candidate.location.clone(),
         };
@@ -294,7 +324,10 @@ fn create_batch_reveal_statements(group: &[RevealCandidate]) -> Vec<AstNode> {
             (Some(var_name), false) => {
                 // Create: var_name = __batch_reveal_N[idx]
                 result.push(AstNode::Assignment {
-                    target: Box::new(AstNode::Identifier(var_name.clone(), candidate.location.clone())),
+                    target: Box::new(AstNode::Identifier(
+                        var_name.clone(),
+                        candidate.location.clone(),
+                    )),
                     value: Box::new(index_access),
                     location: candidate.location.clone(),
                 });
@@ -315,9 +348,7 @@ fn create_batch_reveal_statements(group: &[RevealCandidate]) -> Vec<AstNode> {
 /// Optimizes a block by batching consecutive Share.open() calls
 fn optimize_block(statements: Vec<AstNode>) -> Vec<AstNode> {
     // First, recursively optimize nested structures
-    let statements: Vec<AstNode> = statements.into_iter()
-        .map(optimize_reveals)
-        .collect();
+    let statements: Vec<AstNode> = statements.into_iter().map(optimize_reveals).collect();
 
     // Extract reveal candidates
     let candidates = extract_reveal_candidates(&statements);
@@ -375,56 +406,74 @@ fn optimize_block(statements: Vec<AstNode>) -> Vec<AstNode> {
 /// to reduce network round trips by using Share.batch_open()
 pub fn optimize_reveals(node: AstNode) -> AstNode {
     match node {
-        AstNode::Block(statements) => {
-            AstNode::Block(optimize_block(statements))
-        }
-        AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
-            AstNode::FunctionDefinition {
-                name,
-                parameters,
-                return_type,
-                body: Box::new(optimize_reveals(*body)),
-                is_secret,
-                pragmas,
-                location,
-                node_id,
-            }
-        }
-        AstNode::IfExpression { condition, then_branch, else_branch } => {
-            AstNode::IfExpression {
-                condition: Box::new(optimize_reveals(*condition)),
-                then_branch: Box::new(optimize_reveals(*then_branch)),
-                else_branch: else_branch.map(|e| Box::new(optimize_reveals(*e))),
-            }
-        }
-        AstNode::WhileLoop { condition, body, location } => {
-            AstNode::WhileLoop {
-                condition: Box::new(optimize_reveals(*condition)),
-                body: Box::new(optimize_reveals(*body)),
-                location,
-            }
-        }
-        AstNode::ForLoop { variables, iterable, body, location } => {
-            AstNode::ForLoop {
-                variables,
-                iterable: Box::new(optimize_reveals(*iterable)),
-                body: Box::new(optimize_reveals(*body)),
-                location,
-            }
-        }
-        AstNode::TryCatch { try_block, catch_clauses, finally_block, location } => {
-            AstNode::TryCatch {
-                try_block: Box::new(optimize_reveals(*try_block)),
-                catch_clauses: catch_clauses.into_iter().map(|c| {
-                    crate::ast::CatchClause {
-                        body: Box::new(optimize_reveals(*c.body)),
-                        ..c
-                    }
-                }).collect(),
-                finally_block: finally_block.map(|b| Box::new(optimize_reveals(*b))),
-                location,
-            }
-        }
+        AstNode::Block(statements) => AstNode::Block(optimize_block(statements)),
+        AstNode::FunctionDefinition {
+            name,
+            type_params,
+            parameters,
+            return_type,
+            body,
+            is_secret,
+            pragmas,
+            location,
+            node_id,
+        } => AstNode::FunctionDefinition {
+            name,
+            type_params,
+            parameters,
+            return_type,
+            body: Box::new(optimize_reveals(*body)),
+            is_secret,
+            pragmas,
+            location,
+            node_id,
+        },
+        AstNode::IfExpression {
+            condition,
+            then_branch,
+            else_branch,
+        } => AstNode::IfExpression {
+            condition: Box::new(optimize_reveals(*condition)),
+            then_branch: Box::new(optimize_reveals(*then_branch)),
+            else_branch: else_branch.map(|e| Box::new(optimize_reveals(*e))),
+        },
+        AstNode::WhileLoop {
+            condition,
+            body,
+            location,
+        } => AstNode::WhileLoop {
+            condition: Box::new(optimize_reveals(*condition)),
+            body: Box::new(optimize_reveals(*body)),
+            location,
+        },
+        AstNode::ForLoop {
+            variables,
+            iterable,
+            body,
+            location,
+        } => AstNode::ForLoop {
+            variables,
+            iterable: Box::new(optimize_reveals(*iterable)),
+            body: Box::new(optimize_reveals(*body)),
+            location,
+        },
+        AstNode::TryCatch {
+            try_block,
+            catch_clauses,
+            finally_block,
+            location,
+        } => AstNode::TryCatch {
+            try_block: Box::new(optimize_reveals(*try_block)),
+            catch_clauses: catch_clauses
+                .into_iter()
+                .map(|c| crate::ast::CatchClause {
+                    body: Box::new(optimize_reveals(*c.body)),
+                    ..c
+                })
+                .collect(),
+            finally_block: finally_block.map(|b| Box::new(optimize_reveals(*b))),
+            location,
+        },
         // Pass through other nodes unchanged
         _ => node,
     }
@@ -494,7 +543,11 @@ fn collect_defined_vars(node: &AstNode) -> HashSet<String> {
 fn is_implicit_reveal(node: &AstNode, secret_vars: &HashSet<String>) -> bool {
     match node {
         // var x: T = secret_var (where is_secret=false but value is secret)
-        AstNode::VariableDeclaration { is_secret, value: Some(value), .. } => {
+        AstNode::VariableDeclaration {
+            is_secret,
+            value: Some(value),
+            ..
+        } => {
             if *is_secret {
                 return false; // Secret var assigned from secret is not a reveal
             }
@@ -550,13 +603,11 @@ fn uses_revealed_in_computation(node: &AstNode, revealed_vars: &HashSet<String>)
             false
         }
         // Variable declarations with computation using revealed vars
-        AstNode::VariableDeclaration { value: Some(value), .. } => {
-            uses_revealed_in_computation(value, revealed_vars)
-        }
+        AstNode::VariableDeclaration {
+            value: Some(value), ..
+        } => uses_revealed_in_computation(value, revealed_vars),
         // Assignments with computation using revealed vars
-        AstNode::Assignment { value, .. } => {
-            uses_revealed_in_computation(value, revealed_vars)
-        }
+        AstNode::Assignment { value, .. } => uses_revealed_in_computation(value, revealed_vars),
         // Discard statements
         AstNode::DiscardStatement { expression, .. } => {
             uses_revealed_in_computation(expression, revealed_vars)
@@ -574,7 +625,12 @@ fn reorder_block_for_reveals(statements: Vec<AstNode>) -> Vec<AstNode> {
     // First pass: identify secret variables
     let mut secret_vars: HashSet<String> = HashSet::new();
     for stmt in &statements {
-        if let AstNode::VariableDeclaration { name, is_secret: true, .. } = stmt {
+        if let AstNode::VariableDeclaration {
+            name,
+            is_secret: true,
+            ..
+        } = stmt
+        {
             secret_vars.insert(name.clone());
         }
     }
@@ -671,9 +727,11 @@ fn reorder_block_for_reveals(statements: Vec<AstNode>) -> Vec<AstNode> {
 
     while !remaining.is_empty() {
         // Find candidates that can be scheduled (all predecessors already scheduled)
-        let mut candidates: Vec<usize> = remaining.iter()
+        let mut candidates: Vec<usize> = remaining
+            .iter()
             .filter(|&&idx| {
-                must_precede.get(&idx)
+                must_precede
+                    .get(&idx)
                     .map(|preds| preds.iter().all(|p| scheduled.contains(p)))
                     .unwrap_or(true)
             })
@@ -700,9 +758,17 @@ fn reorder_block_for_reveals(statements: Vec<AstNode>) -> Vec<AstNode> {
             // This ensures secret declarations come before reveals,
             // and reveals come before computations that use them
             let priority = |info: &StatementInfo| -> u8 {
-                if info.uses_revealed_var { 2 }  // Flush triggers last
-                else if info.is_implicit_reveal { 1 }  // Reveals second
-                else { 0 }  // Neutral first (includes secret declarations)
+                if info.uses_revealed_var {
+                    2
+                }
+                // Flush triggers last
+                else if info.is_implicit_reveal {
+                    1
+                }
+                // Reveals second
+                else {
+                    0
+                } // Neutral first (includes secret declarations)
             };
 
             let pa = priority(info_a);
@@ -731,46 +797,63 @@ pub fn reorder_for_reveal_batching(node: AstNode) -> AstNode {
     match node {
         AstNode::Block(statements) => {
             // First recursively process nested structures
-            let statements: Vec<AstNode> = statements.into_iter()
+            let statements: Vec<AstNode> = statements
+                .into_iter()
                 .map(reorder_for_reveal_batching)
                 .collect();
             // Then reorder this block
             AstNode::Block(reorder_block_for_reveals(statements))
         }
-        AstNode::FunctionDefinition { name, parameters, return_type, body, is_secret, pragmas, location, node_id } => {
-            AstNode::FunctionDefinition {
-                name,
-                parameters,
-                return_type,
-                body: Box::new(reorder_for_reveal_batching(*body)),
-                is_secret,
-                pragmas,
-                location,
-                node_id,
-            }
-        }
-        AstNode::IfExpression { condition, then_branch, else_branch } => {
-            AstNode::IfExpression {
-                condition: Box::new(reorder_for_reveal_batching(*condition)),
-                then_branch: Box::new(reorder_for_reveal_batching(*then_branch)),
-                else_branch: else_branch.map(|e| Box::new(reorder_for_reveal_batching(*e))),
-            }
-        }
-        AstNode::WhileLoop { condition, body, location } => {
-            AstNode::WhileLoop {
-                condition: Box::new(reorder_for_reveal_batching(*condition)),
-                body: Box::new(reorder_for_reveal_batching(*body)),
-                location,
-            }
-        }
-        AstNode::ForLoop { variables, iterable, body, location } => {
-            AstNode::ForLoop {
-                variables,
-                iterable: Box::new(reorder_for_reveal_batching(*iterable)),
-                body: Box::new(reorder_for_reveal_batching(*body)),
-                location,
-            }
-        }
+        AstNode::FunctionDefinition {
+            name,
+            type_params,
+            parameters,
+            return_type,
+            body,
+            is_secret,
+            pragmas,
+            location,
+            node_id,
+        } => AstNode::FunctionDefinition {
+            name,
+            type_params,
+            parameters,
+            return_type,
+            body: Box::new(reorder_for_reveal_batching(*body)),
+            is_secret,
+            pragmas,
+            location,
+            node_id,
+        },
+        AstNode::IfExpression {
+            condition,
+            then_branch,
+            else_branch,
+        } => AstNode::IfExpression {
+            condition: Box::new(reorder_for_reveal_batching(*condition)),
+            then_branch: Box::new(reorder_for_reveal_batching(*then_branch)),
+            else_branch: else_branch.map(|e| Box::new(reorder_for_reveal_batching(*e))),
+        },
+        AstNode::WhileLoop {
+            condition,
+            body,
+            location,
+        } => AstNode::WhileLoop {
+            condition: Box::new(reorder_for_reveal_batching(*condition)),
+            body: Box::new(reorder_for_reveal_batching(*body)),
+            location,
+        },
+        AstNode::ForLoop {
+            variables,
+            iterable,
+            body,
+            location,
+        } => AstNode::ForLoop {
+            variables,
+            iterable: Box::new(reorder_for_reveal_batching(*iterable)),
+            body: Box::new(reorder_for_reveal_batching(*body)),
+            location,
+        },
         // Pass through other nodes unchanged
         _ => node,
     }
@@ -830,9 +913,10 @@ mod tests {
     fn test_no_batch_single_reveal() {
         reset_temp_counter();
 
-        let block = AstNode::Block(vec![
-            make_var_decl("a", make_share_open(make_identifier("s1"))),
-        ]);
+        let block = AstNode::Block(vec![make_var_decl(
+            "a",
+            make_share_open(make_identifier("s1")),
+        )]);
 
         let optimized = optimize_reveals(block);
 
@@ -840,7 +924,10 @@ mod tests {
         if let AstNode::Block(stmts) = optimized {
             assert_eq!(stmts.len(), 1);
             // Should still be a VariableDeclaration with Share.open
-            if let AstNode::VariableDeclaration { value: Some(val), .. } = &stmts[0] {
+            if let AstNode::VariableDeclaration {
+                value: Some(val), ..
+            } = &stmts[0]
+            {
                 assert!(is_share_open_call(val).is_some());
             } else {
                 panic!("Expected VariableDeclaration");
@@ -869,8 +956,16 @@ mod tests {
             assert_eq!(stmts.len(), 3, "Expected 3 statements after batching");
 
             // First should be the batch call
-            if let AstNode::VariableDeclaration { name, value: Some(val), .. } = &stmts[0] {
-                assert!(name.starts_with("__batch_reveal_"), "Expected temp variable name");
+            if let AstNode::VariableDeclaration {
+                name,
+                value: Some(val),
+                ..
+            } = &stmts[0]
+            {
+                assert!(
+                    name.starts_with("__batch_reveal_"),
+                    "Expected temp variable name"
+                );
                 if let AstNode::FunctionCall { function, .. } = val.as_ref() {
                     if let AstNode::Identifier(fn_name, _) = function.as_ref() {
                         assert_eq!(fn_name, "Share.batch_open");
@@ -885,7 +980,12 @@ mod tests {
             }
 
             // Second should be index access for 'a'
-            if let AstNode::VariableDeclaration { name, value: Some(val), .. } = &stmts[1] {
+            if let AstNode::VariableDeclaration {
+                name,
+                value: Some(val),
+                ..
+            } = &stmts[1]
+            {
                 assert_eq!(name, "a");
                 assert!(matches!(val.as_ref(), AstNode::IndexAccess { .. }));
             } else {
@@ -893,7 +993,12 @@ mod tests {
             }
 
             // Third should be index access for 'b'
-            if let AstNode::VariableDeclaration { name, value: Some(val), .. } = &stmts[2] {
+            if let AstNode::VariableDeclaration {
+                name,
+                value: Some(val),
+                ..
+            } = &stmts[2]
+            {
                 assert_eq!(name, "b");
                 assert!(matches!(val.as_ref(), AstNode::IndexAccess { .. }));
             } else {
@@ -937,7 +1042,11 @@ mod tests {
         let optimized = optimize_reveals(block);
 
         if let AstNode::Block(stmts) = optimized {
-            assert_eq!(stmts.len(), 4, "Expected 4 statements after batching 3 reveals");
+            assert_eq!(
+                stmts.len(),
+                4,
+                "Expected 4 statements after batching 3 reveals"
+            );
         } else {
             panic!("Expected Block");
         }
@@ -993,7 +1102,7 @@ mod tests {
             type_annotation: None,
             value: Some(Box::new(value)),
             is_mutable: false,
-            is_secret: true,  // Secret variable
+            is_secret: true, // Secret variable
             location: make_loc(),
         }
     }
@@ -1020,16 +1129,16 @@ mod tests {
         // Test that reveals are grouped before flush-triggering computations
         //
         // Input:
-        //   secret var s1 = ...
-        //   secret var s2 = ...
+        //   var s1 = ...
+        //   var s2 = ...
         //   var a: int = s1        // reveal
         //   var x = a * 2          // uses a - flush trigger
         //   var b: int = s2        // reveal
         //   var y = b * 3          // uses b - flush trigger
         //
         // Expected output (reordered):
-        //   secret var s1 = ...
-        //   secret var s2 = ...
+        //   var s1 = ...
+        //   var s2 = ...
         //   var a: int = s1        // reveal - queued
         //   var b: int = s2        // reveal - queued (moved up!)
         //   var x = a * 2          // uses a - flush (both batched)
@@ -1038,12 +1147,30 @@ mod tests {
         let block = AstNode::Block(vec![
             make_secret_var_decl("s1", make_identifier("input1")),
             make_secret_var_decl("s2", make_identifier("input2")),
-            make_var_decl("a", make_identifier("s1")),  // reveal
-            make_var_decl("x", make_binary_op(make_identifier("a"), "*",
-                AstNode::Literal(crate::ast::Value::Int { value: 2, kind: None }))),  // uses a
-            make_var_decl("b", make_identifier("s2")),  // reveal
-            make_var_decl("y", make_binary_op(make_identifier("b"), "*",
-                AstNode::Literal(crate::ast::Value::Int { value: 3, kind: None }))),  // uses b
+            make_var_decl("a", make_identifier("s1")), // reveal
+            make_var_decl(
+                "x",
+                make_binary_op(
+                    make_identifier("a"),
+                    "*",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 2,
+                        kind: None,
+                    }),
+                ),
+            ), // uses a
+            make_var_decl("b", make_identifier("s2")), // reveal
+            make_var_decl(
+                "y",
+                make_binary_op(
+                    make_identifier("b"),
+                    "*",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 3,
+                        kind: None,
+                    }),
+                ),
+            ), // uses b
         ]);
 
         let optimized = reorder_for_reveal_batching(block);
@@ -1057,7 +1184,7 @@ mod tests {
 
             // Next two should be reveals (a and b grouped together)
             assert_eq!(get_var_decl_name(&stmts[2]), Some("a"));
-            assert_eq!(get_var_decl_name(&stmts[3]), Some("b"));  // b moved up!
+            assert_eq!(get_var_decl_name(&stmts[3]), Some("b")); // b moved up!
 
             // Last two should be the computations
             assert_eq!(get_var_decl_name(&stmts[4]), Some("x"));
@@ -1072,7 +1199,7 @@ mod tests {
         // Test that reordering respects data dependencies
         //
         // Input:
-        //   secret var s1 = ...
+        //   var s1 = ...
         //   var a: int = s1        // reveal
         //   var x = a * 2          // depends on a
         //   var y = x + 1          // depends on x (chain dependency)
@@ -1081,11 +1208,29 @@ mod tests {
 
         let block = AstNode::Block(vec![
             make_secret_var_decl("s1", make_identifier("input1")),
-            make_var_decl("a", make_identifier("s1")),  // reveal
-            make_var_decl("x", make_binary_op(make_identifier("a"), "*",
-                AstNode::Literal(crate::ast::Value::Int { value: 2, kind: None }))),
-            make_var_decl("y", make_binary_op(make_identifier("x"), "+",
-                AstNode::Literal(crate::ast::Value::Int { value: 1, kind: None }))),
+            make_var_decl("a", make_identifier("s1")), // reveal
+            make_var_decl(
+                "x",
+                make_binary_op(
+                    make_identifier("a"),
+                    "*",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 2,
+                        kind: None,
+                    }),
+                ),
+            ),
+            make_var_decl(
+                "y",
+                make_binary_op(
+                    make_identifier("x"),
+                    "+",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 1,
+                        kind: None,
+                    }),
+                ),
+            ),
         ]);
 
         let optimized = reorder_for_reveal_batching(block);
@@ -1108,7 +1253,7 @@ mod tests {
         // Test that flush-triggering statements come after reveals and independent computations
         //
         // Input:
-        //   secret var s1 = ...
+        //   var s1 = ...
         //   var a: int = s1        // reveal
         //   var z = 5 + 3          // independent computation
         //   var x = a * 2          // uses a (flush trigger)
@@ -1119,13 +1264,32 @@ mod tests {
 
         let block = AstNode::Block(vec![
             make_secret_var_decl("s1", make_identifier("input1")),
-            make_var_decl("a", make_identifier("s1")),  // reveal
-            make_var_decl("z", make_binary_op(
-                AstNode::Literal(crate::ast::Value::Int { value: 5, kind: None }),
-                "+",
-                AstNode::Literal(crate::ast::Value::Int { value: 3, kind: None }))),  // independent
-            make_var_decl("x", make_binary_op(make_identifier("a"), "*",
-                AstNode::Literal(crate::ast::Value::Int { value: 2, kind: None }))),  // uses a
+            make_var_decl("a", make_identifier("s1")), // reveal
+            make_var_decl(
+                "z",
+                make_binary_op(
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 5,
+                        kind: None,
+                    }),
+                    "+",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 3,
+                        kind: None,
+                    }),
+                ),
+            ), // independent
+            make_var_decl(
+                "x",
+                make_binary_op(
+                    make_identifier("a"),
+                    "*",
+                    AstNode::Literal(crate::ast::Value::Int {
+                        value: 2,
+                        kind: None,
+                    }),
+                ),
+            ), // uses a
         ]);
 
         let optimized = reorder_for_reveal_batching(block);
@@ -1152,7 +1316,10 @@ mod tests {
         let block = AstNode::Block(vec![
             make_var_decl("a", make_identifier("x")),
             make_var_decl("b", make_identifier("y")),
-            make_var_decl("c", make_binary_op(make_identifier("a"), "+", make_identifier("b"))),
+            make_var_decl(
+                "c",
+                make_binary_op(make_identifier("a"), "+", make_identifier("b")),
+            ),
         ]);
 
         let optimized = reorder_for_reveal_batching(block.clone());

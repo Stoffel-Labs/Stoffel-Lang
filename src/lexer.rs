@@ -14,7 +14,11 @@ pub enum TokenKind {
     Operator(String),
     Arrow, // ->
     // Literals
-    IntLiteral { value: u128, radix: u32, kind: Option<crate::ast::IntKind> }, // includes bases and optional suffix
+    IntLiteral {
+        value: u128,
+        radix: u32,
+        kind: Option<crate::ast::IntKind>,
+    }, // includes bases and optional suffix
     FloatLiteral(u64), // this is a fixed point
     StringLiteral(String),
     BoolLiteral(bool),
@@ -27,8 +31,8 @@ pub enum TokenKind {
     RBracket,
     Comma,
     Dot,
-    LPragma, // {.
-    RPragma, // .}
+    LPragma,   // {.
+    RPragma,   // .}
     PragmaDot, // . inside pragma
     Colon,
     Assign,
@@ -49,26 +53,45 @@ fn get_keywords() -> HashMap<String, TokenKind> {
     keywords.insert("var".to_string(), TokenKind::Keyword("var".to_string()));
     keywords.insert("def".to_string(), TokenKind::Keyword("def".to_string()));
     keywords.insert("main".to_string(), TokenKind::Keyword("main".to_string()));
+    keywords.insert(
+        "builtin".to_string(),
+        TokenKind::Keyword("builtin".to_string()),
+    );
     keywords.insert("type".to_string(), TokenKind::Keyword("type".to_string()));
-    keywords.insert("object".to_string(), TokenKind::Keyword("object".to_string()));
+    keywords.insert(
+        "object".to_string(),
+        TokenKind::Keyword("object".to_string()),
+    );
     keywords.insert("enum".to_string(), TokenKind::Keyword("enum".to_string()));
     keywords.insert("if".to_string(), TokenKind::Keyword("if".to_string()));
     keywords.insert("else".to_string(), TokenKind::Keyword("else".to_string()));
     keywords.insert("elif".to_string(), TokenKind::Keyword("elif".to_string())); // Or 'elsif'/'elif'? Nim uses 'elif'
+    keywords.insert("and".to_string(), TokenKind::Operator("and".to_string()));
+    keywords.insert("or".to_string(), TokenKind::Operator("or".to_string()));
+    keywords.insert("not".to_string(), TokenKind::Operator("not".to_string()));
     keywords.insert("while".to_string(), TokenKind::Keyword("while".to_string()));
     keywords.insert("for".to_string(), TokenKind::Keyword("for".to_string()));
     keywords.insert("in".to_string(), TokenKind::Keyword("in".to_string()));
-    keywords.insert("return".to_string(), TokenKind::Keyword("return".to_string()));
-    keywords.insert("yield".to_string(), TokenKind::Keyword("yield".to_string()));
-    keywords.insert("break".to_string(), TokenKind::Keyword("break".to_string()));
-    keywords.insert("continue".to_string(), TokenKind::Keyword("continue".to_string()));
-    keywords.insert("true".to_string(), TokenKind::BoolLiteral(true));
-    keywords.insert("false".to_string(), TokenKind::BoolLiteral(false));
-    keywords.insert("nil".to_string(), TokenKind::NilLiteral);
-    keywords.insert("secret".to_string(), TokenKind::Keyword("secret".to_string())); // The special keyword
-    keywords.insert("discard".to_string(), TokenKind::Keyword("discard".to_string()));
+    keywords.insert(
+        "return".to_string(),
+        TokenKind::Keyword("return".to_string()),
+    );
+    keywords.insert("True".to_string(), TokenKind::BoolLiteral(true));
+    keywords.insert("False".to_string(), TokenKind::BoolLiteral(false));
+    keywords.insert("None".to_string(), TokenKind::NilLiteral);
+    keywords.insert(
+        "secret".to_string(),
+        TokenKind::Keyword("secret".to_string()),
+    ); // The special keyword
+    keywords.insert(
+        "discard".to_string(),
+        TokenKind::Keyword("discard".to_string()),
+    );
     // Import system keywords
-    keywords.insert("import".to_string(), TokenKind::Keyword("import".to_string()));
+    keywords.insert(
+        "import".to_string(),
+        TokenKind::Keyword("import".to_string()),
+    );
     keywords.insert("as".to_string(), TokenKind::Keyword("as".to_string()));
     // Note: 'let' intentionally not added as a keyword anymore. It will be tokenized
     // as an Identifier to allow targeted parse-time diagnostics and potential use as a name.
@@ -93,7 +116,10 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
         }
     };
     let mut push_token = |kind: TokenKind, loc: SourceLocation| {
-        tokens.push(TokenInfo { kind, location: loc });
+        tokens.push(TokenInfo {
+            kind,
+            location: loc,
+        });
     };
 
     // Note: 'main' is reserved as a keyword to denote the entry function declaration
@@ -101,7 +127,6 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
     // The parser decides its role based on context.
 
     loop {
-
         if at_line_start {
             // --- Indentation Handling ---
             let mut indent_level = 0;
@@ -121,9 +146,12 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         column,
                     };
                     let snippet = extract_source_snippet(source, &location, 2);
-                    return Err(CompilerError::syntax_error("Tabs are not allowed for indentation", location)
-                        .with_snippet(snippet)
-                        .with_hint("Use spaces for indentation instead of tabs"));
+                    return Err(CompilerError::syntax_error(
+                        "Tabs are not allowed for indentation",
+                        location,
+                    )
+                    .with_snippet(snippet)
+                    .with_hint("Use spaces for indentation instead of tabs"));
                 } else {
                     break; // Found non-whitespace or EOF
                 }
@@ -161,7 +189,8 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 } else if indent_level < last_indent {
                     while indent_level < *indent_stack.last().unwrap() {
                         indent_stack.pop();
-                        push_token(TokenKind::Dedent, make_location(line, column)); // Location might be slightly off here
+                        push_token(TokenKind::Dedent, make_location(line, column));
+                        // Location might be slightly off here
                     }
                     // After popping, check if the level matches exactly
                     if indent_level != *indent_stack.last().unwrap() {
@@ -172,9 +201,12 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         };
                         let snippet = extract_source_snippet(source, &location, 2);
                         return Err(CompilerError::syntax_error(
-                            format!("Inconsistent dedentation. Expected indent level {}, got {}",
-                                    *indent_stack.last().unwrap(), indent_level),
-                            location
+                            format!(
+                                "Inconsistent dedentation. Expected indent level {}, got {}",
+                                *indent_stack.last().unwrap(),
+                                indent_level
+                            ),
+                            location,
                         )
                         .with_snippet(snippet)
                         .with_hint("Make sure all indentation levels are consistent"));
@@ -197,7 +229,9 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
         // --- Main Token Matching Logic ---
         match c {
             // Ignore non-leading whitespace
-            ' ' | '\t' => { column += 1; }
+            ' ' | '\t' => {
+                column += 1;
+            }
             '\n' => {
                 // Emit Newline, reset state for next line
                 push_token(TokenKind::Newline, make_location(line, column));
@@ -205,40 +239,60 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 column = 1;
                 at_line_start = true;
             }
-            '#' => { // Comments
+            '#' => {
+                // Comments
                 // Consume until newline or EOF
                 while let Some(&peek_char) = iter.peek() {
                     if peek_char == '\n' {
                         break;
                     }
                     iter.next(); // Consume comment character
-                    // Column will be reset by the newline handler
+                                 // Column will be reset by the newline handler
                 }
                 // Don't add a comment token, just consume the characters
             }
-            '(' => { push_token(TokenKind::LParen, make_location(line, column)); column += 1; }
-            ')' => { push_token(TokenKind::RParen, make_location(line, column)); column += 1; }
+            '(' => {
+                push_token(TokenKind::LParen, make_location(line, column));
+                column += 1;
+            }
+            ')' => {
+                push_token(TokenKind::RParen, make_location(line, column));
+                column += 1;
+            }
             '{' => {
                 if iter.peek() == Some(&'.') {
                     iter.next(); // Consume '.'
                     push_token(TokenKind::LPragma, make_location(line, column));
                     column += 2;
                 } else {
-                    push_token(TokenKind::LBrace, make_location(line, column)); column += 1;
+                    push_token(TokenKind::LBrace, make_location(line, column));
+                    column += 1;
                 }
             }
-            '}' => { push_token(TokenKind::RBrace, make_location(line, column)); column += 1; }
-            '[' => { push_token(TokenKind::LBracket, make_location(line, column)); column += 1; }
-            ']' => { push_token(TokenKind::RBracket, make_location(line, column)); column += 1; }
-            ',' => { push_token(TokenKind::Comma, make_location(line, column)); column += 1; }
+            '}' => {
+                push_token(TokenKind::RBrace, make_location(line, column));
+                column += 1;
+            }
+            '[' => {
+                push_token(TokenKind::LBracket, make_location(line, column));
+                column += 1;
+            }
+            ']' => {
+                push_token(TokenKind::RBracket, make_location(line, column));
+                column += 1;
+            }
+            ',' => {
+                push_token(TokenKind::Comma, make_location(line, column));
+                column += 1;
+            }
             '.' => {
                 // --- Check for RPragma first ---
                 if iter.peek() == Some(&'}') {
                     iter.next(); // Consume '}'
                     push_token(TokenKind::RPragma, make_location(line, column));
                     column += 2; // Account for both '.' and '}'
-                // --- Check for float literal starting with '.' ---
-                } else if iter.peek().map_or(false, |ch| ch.is_ascii_digit()) {
+                                 // --- Check for float literal starting with '.' ---
+                } else if iter.peek().is_some_and(|ch| ch.is_ascii_digit()) {
                     // Likely start of a float like .5
                     let mut num_str = "0.".to_string(); // Prepend 0
                     column += 1; // Account for the initial '.'
@@ -256,26 +310,38 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     match num_str.parse::<f64>() {
                         Ok(f) => {
                             let fixed = (f * multiplier as f64).round() as u64;
-                            push_token(TokenKind::FloatLiteral(fixed), make_location(line, column - num_str.len() + 1)); // Adjust location
-                        },
+                            push_token(
+                                TokenKind::FloatLiteral(fixed),
+                                make_location(line, column - num_str.len() + 1),
+                            ); // Adjust location
+                        }
                         Err(_) => { /* Error handling */ }
                     }
                 // --- Check for '..' operator ---
                 } else if iter.peek() == Some(&'.') {
                     iter.next(); // Consume second dot
-                    push_token(TokenKind::Operator("..".to_string()), make_location(line, column));
+                    push_token(
+                        TokenKind::Operator("..".to_string()),
+                        make_location(line, column),
+                    );
                     column += 2;
                 } else {
                     push_token(TokenKind::Dot, make_location(line, column));
                     column += 1;
                 }
             }
-            ':' => { push_token(TokenKind::Colon, make_location(line, column)); column += 1; }
+            ':' => {
+                push_token(TokenKind::Colon, make_location(line, column));
+                column += 1;
+            }
             '=' => {
                 // Allow '==' as equality; single '=' is assignment token (used in expressions only now)
                 if iter.peek() == Some(&'=') {
                     iter.next(); // Consume second '='
-                    push_token(TokenKind::Operator("==".to_string()), make_location(line, column));
+                    push_token(
+                        TokenKind::Operator("==".to_string()),
+                        make_location(line, column),
+                    );
                     column += 2;
                 } else {
                     push_token(TokenKind::Assign, make_location(line, column));
@@ -291,16 +357,22 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 } else if iter.peek() == Some(&'=') {
                     // Compound assignment -= operator
                     iter.next(); // consume '='
-                    push_token(TokenKind::Operator("-=".to_string()), make_location(line, column));
+                    push_token(
+                        TokenKind::Operator("-=".to_string()),
+                        make_location(line, column),
+                    );
                     column += 2;
                 } else {
                     // Fallback to operator collection (e.g., '-', '->' handled above)
                     let start_col = column;
                     let mut op = "-".to_string();
                     while let Some(&next_c) = iter.peek() {
-                        if is_operator_char(next_c) && next_c != '>' && next_c != '=' { // avoid swallowing '>' or '='
+                        if is_operator_char(next_c) && next_c != '>' && next_c != '=' {
+                            // avoid swallowing '>' or '='
                             op.push(iter.next().unwrap());
-                        } else { break; }
+                        } else {
+                            break;
+                        }
                     }
                     column += op.len();
                     push_token(TokenKind::Operator(op), make_location(line, start_col));
@@ -335,10 +407,24 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 if c == '0' {
                     if let Some(&next_c) = iter.peek() {
                         match next_c {
-                            'x' | 'X' => { iter.next(); consumed += 1; radix = 16; },
-                            'b' | 'B' => { iter.next(); consumed += 1; radix = 2; },
-                            'o' | 'O' => { iter.next(); consumed += 1; radix = 8; },
-                            _ => { digits.push('0'); }
+                            'x' | 'X' => {
+                                iter.next();
+                                consumed += 1;
+                                radix = 16;
+                            }
+                            'b' | 'B' => {
+                                iter.next();
+                                consumed += 1;
+                                radix = 2;
+                            }
+                            'o' | 'O' => {
+                                iter.next();
+                                consumed += 1;
+                                radix = 8;
+                            }
+                            _ => {
+                                digits.push('0');
+                            }
                         }
                     } else {
                         digits.push('0');
@@ -348,7 +434,7 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 }
 
                 // Helper to check valid digit for radix
-                let mut is_valid_digit = |ch: char| -> bool {
+                let is_valid_digit = |ch: char| -> bool {
                     match radix {
                         2 => ch == '0' || ch == '1',
                         8 => ch.is_ascii_digit() && ch <= '7',
@@ -361,7 +447,8 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 // Collect digits (and underscores)
                 while let Some(&next_c) = iter.peek() {
                     if next_c == '_' {
-                        iter.next(); consumed += 1; // skip underscore
+                        iter.next();
+                        consumed += 1; // skip underscore
                     } else if is_valid_digit(next_c) {
                         digits.push(iter.next().unwrap());
                         consumed += 1;
@@ -370,16 +457,19 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                         // Check not '..' and that a digit follows
                         let mut peek_ahead = iter.clone();
                         peek_ahead.next();
-                        if peek_ahead.peek().map_or(false, |ch| ch.is_ascii_digit()) {
+                        if peek_ahead.peek().is_some_and(|ch| ch.is_ascii_digit()) {
                             is_float = true;
                             digits.push('.');
-                            iter.next(); consumed += 1; // consume '.'
-                            // collect fractional digits
+                            iter.next();
+                            consumed += 1; // consume '.'
+                                           // collect fractional digits
                             while let Some(&frac_c) = iter.peek() {
                                 if frac_c.is_ascii_digit() {
                                     digits.push(iter.next().unwrap());
                                     consumed += 1;
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                         }
                         break;
@@ -397,24 +487,47 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                             let mut suffix = String::new();
                             // Consume up to 3 characters for i/u and digits
                             while let Some(&ch) = probe.peek() {
-                                if ch.is_ascii_alphanumeric() { suffix.push(ch); probe.next(); }
-                                else { break; }
-                                if suffix.len() > 3 { break; }
+                                if ch.is_ascii_alphanumeric() {
+                                    suffix.push(ch);
+                                    probe.next();
+                                } else {
+                                    break;
+                                }
+                                if suffix.len() > 3 {
+                                    break;
+                                }
                             }
                             let matched = match suffix.as_str() {
                                 "i8" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W8)),
-                                "i16" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W16)),
-                                "i32" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W32)),
-                                "i64" => Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W64)),
-                                "u8" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W8)),
-                                "u16" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W16)),
-                                "u32" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W32)),
-                                "u64" => Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W64)),
+                                "i16" => {
+                                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W16))
+                                }
+                                "i32" => {
+                                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W32))
+                                }
+                                "i64" => {
+                                    Some(crate::ast::IntKind::Signed(crate::ast::IntWidth::W64))
+                                }
+                                "u8" => {
+                                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W8))
+                                }
+                                "u16" => {
+                                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W16))
+                                }
+                                "u32" => {
+                                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W32))
+                                }
+                                "u64" => {
+                                    Some(crate::ast::IntKind::Unsigned(crate::ast::IntWidth::W64))
+                                }
                                 _ => None,
                             };
                             if let Some(k) = matched {
                                 // Commit consumption
-                                for _ in 0..suffix.len() { iter.next(); consumed += 1; }
+                                for _ in 0..suffix.len() {
+                                    iter.next();
+                                    consumed += 1;
+                                }
                                 kind = Some(k);
                             }
                         }
@@ -429,15 +542,25 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                     match digits.parse::<f64>() {
                         Ok(f) => {
                             let fixed = (f * multiplier as f64).round() as u64;
-                            push_token(TokenKind::FloatLiteral(fixed), make_location(line, start_col));
-                        },
+                            push_token(
+                                TokenKind::FloatLiteral(fixed),
+                                make_location(line, start_col),
+                            );
+                        }
                         Err(_) => { /* Error handling */ }
                     }
                 } else {
                     // convert digits (without underscores) in given radix
                     let clean: String = digits.chars().filter(|&ch| ch != '_').collect();
                     match u128::from_str_radix(&clean, radix) {
-                        Ok(val) => push_token(TokenKind::IntLiteral { value: val, radix, kind }, make_location(line, start_col)),
+                        Ok(val) => push_token(
+                            TokenKind::IntLiteral {
+                                value: val,
+                                radix,
+                                kind,
+                            },
+                            make_location(line, start_col),
+                        ),
                         Err(_) => { /* Error handling */ }
                     }
                 }
@@ -449,28 +572,56 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
                 column += 1; // Account for opening quote
                 loop {
                     match iter.next() {
-                        Some('"') => { column += 1; break; }
-                        Some('\\') => { // Handle escape sequences
+                        Some('"') => {
+                            column += 1;
+                            break;
+                        }
+                        Some('\\') => {
+                            // Handle escape sequences
                             let escape_col = column; // Column of the escape character
                             column += 1;
                             match iter.next() {
-                                Some('n') => { s.push('\n'); column += 1; }
-                                Some('t') => { s.push('\t'); column += 1; }
-                                Some('\\') => { s.push('\\'); column += 1; }
-                                Some('"') => { s.push('"'); column += 1; }
+                                Some('n') => {
+                                    s.push('\n');
+                                    column += 1;
+                                }
+                                Some('t') => {
+                                    s.push('\t');
+                                    column += 1;
+                                }
+                                Some('\\') => {
+                                    s.push('\\');
+                                    column += 1;
+                                }
+                                Some('"') => {
+                                    s.push('"');
+                                    column += 1;
+                                }
                                 Some(esc_c) => {
                                     // Invalid escape sequence
-                                    let location = SourceLocation { file: filename.to_string(), line, column: escape_col };
+                                    let location = SourceLocation {
+                                        file: filename.to_string(),
+                                        line,
+                                        column: escape_col,
+                                    };
                                     let snippet = extract_source_snippet(source, &location, 2);
-                                    return Err(CompilerError::syntax_error(format!("Invalid escape sequence: \\{}", esc_c), location)
-                                        .with_snippet(snippet)
-                                        .with_hint("Valid escape sequences are: \\n, \\t, \\\", and \\\\"));
+                                    return Err(CompilerError::syntax_error(
+                                        format!("Invalid escape sequence: \\{}", esc_c),
+                                        location,
+                                    )
+                                    .with_snippet(snippet)
+                                    .with_hint(
+                                        "Valid escape sequences are: \\n, \\t, \\\", and \\\\",
+                                    ));
                                 }
                                 None => { /* Unterminated escape error */ }
                             }
                         }
                         Some('\n') => { /* Unterminated string error (newline) */ }
-                        Some(str_c) => { s.push(str_c); column += 1; }
+                        Some(str_c) => {
+                            s.push(str_c);
+                            column += 1;
+                        }
                         None => { /* Unterminated string error (EOF) */ }
                     }
                 }
@@ -496,10 +647,17 @@ pub fn tokenize(source: &str, filename: &str) -> CompilerResult<Vec<TokenInfo>> 
             }
             _ => {
                 // Error: Unexpected character
-                let location = SourceLocation { file: filename.to_string(), line, column };
+                let location = SourceLocation {
+                    file: filename.to_string(),
+                    line,
+                    column,
+                };
                 let snippet = extract_source_snippet(source, &location, 2);
-                return Err(CompilerError::syntax_error(format!("Unexpected character: {}", c), location)
-                    .with_snippet(snippet));
+                return Err(CompilerError::syntax_error(
+                    format!("Unexpected character: {}", c),
+                    location,
+                )
+                .with_snippet(snippet));
             }
         }
     }
